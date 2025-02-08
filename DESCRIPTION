@@ -1,7 +1,7 @@
 Package: stochtree
 Title: Stochastic Tree Ensembles (XBART and BART) for Supervised
         Learning and Causal Inference
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: 
   c(
     person("Drew", "Herren", email = "drewherrenopensource@gmail.com", role = c("aut", "cre"), comment = c(ORCID = "0000-0003-4109-6611")), 
@@ -36,10 +36,11 @@ LinkingTo: cpp11, BH
 Suggests: testthat (>= 3.0.0),
 SystemRequirements: C++17
 Imports: R6, stats
-URL: https://stochtree.ai
+URL: https://stochtree.ai/, https://github.com/StochasticTree/stochtree
+BugReports: https://github.com/StochasticTree/stochtree/issues
 Config/testthat/edition: 3
 NeedsCompilation: yes
-Packaged: 2025-02-07 00:44:55 UTC; drew
+Packaged: 2025-02-08 07:14:14 UTC; drew
 Author: Drew Herren [aut, cre] (<https://orcid.org/0000-0003-4109-6611>),
   Richard Hahn [aut],
   Jared Murray [aut],
@@ -66,4 +67,4 @@ Author: Drew Herren [aut, cre] (<https://orcid.org/0000-0003-4109-6611>),
     inst/COPYRIGHTS)
 Maintainer: Drew Herren <drewherrenopensource@gmail.com>
 Repository: CRAN
-Date/Publication: 2025-02-07 10:00:02 UTC
+Date/Publication: 2025-02-08 16:20:02 UTC

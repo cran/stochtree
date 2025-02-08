@@ -1,4 +1,4 @@
-eea5d9d2912d542c679b459b9995f61d *DESCRIPTION
+27ede280cdd252184e8edbeb104a4690 *DESCRIPTION
 3449f3cf486bc439d60223492ff75a38 *LICENSE
 58d261a0409a25029a8016d8668ab76c *NAMESPACE
 8444b2d02ae830842079fd68f69596d6 *NEWS.md
@@ -12,7 +12,7 @@ cc7f40ec7aca3fff7d2a82771e744a0d *R/data.R
 4a4dd60ef8355a4cfc762dfbc992bb16 *R/generics.R
 e1704ba82cae3b2c065615f73c2f75c7 *R/kernel.R
 40c33ad88f285db84d7a9176437facc2 *R/model.R
-b4d3c7394264627811ff97050225f3f4 *R/random_effects.R
+4cca7c193c7baadd295a9d4c7a0a8f16 *R/random_effects.R
 69f88312e521fe57fe2a83eb4f07bb01 *R/serialization.R
 56f905ba993a0056f9d5ceb4f9e271d5 *R/stochtree-package.R
 434d5a43ff893f4f9dc53e4f9608d88f *R/utils.R
@@ -84,10 +84,10 @@ aa7c0de4a3c107217db585cf9c97d1cd *man/predict.bartmodel.Rd
 b4c9d6e86b56804a24a24b05d09b1c09 *man/preprocessTrainData.Rd
 a2b5476b20db374cdf791dd0028a906d *man/resetActiveForest.Rd
 3e100d4b54ccb4c38735225a7648a19e *man/resetForestModel.Rd
-19f3240af51b92f97e3854fda75be984 *man/resetRandomEffectsModel.Rd
-16365896b418697ebe238bfb4bc57858 *man/resetRandomEffectsTracker.Rd
-510aaced0665e54e477d86a20b7e27b1 *man/rootResetRandomEffectsModel.Rd
-5f87b2c89f7285d6155d826ca789ff39 *man/rootResetRandomEffectsTracker.Rd
+cd2d2018431a5d2d0a9d40dcda092369 *man/resetRandomEffectsModel.Rd
+eb444fae469dfbfab58788ef627138cb *man/resetRandomEffectsTracker.Rd
+7bbaede3588941f13ccd5192c9f436fc *man/rootResetRandomEffectsModel.Rd
+e2ce1f5d5ba2f2308c0e83ab92de4dd1 *man/rootResetRandomEffectsTracker.Rd
 03e5ae761f2d026238371ea3ee0536a2 *man/sampleGlobalErrorVarianceOneIteration.Rd
 d707da7ff8e08c21eaa92fcf75da4736 *man/sampleLeafVarianceOneIteration.Rd
 15c9d320e2bc3799bbec75d89f05bf1e *man/saveBARTModelToJson.Rd
@@ -97,7 +97,7 @@ f107766f2c34daa0496680b58b4d0448 *man/saveBCFModelToJson.Rd
 1c156e1e88d10d6974c52c344a78aee5 *man/saveBCFModelToJsonFile.Rd
 e15efc92a70d830a903cf882e0dc41b7 *man/saveBCFModelToJsonString.Rd
 323f51394b0d81e92a6ff825759f5122 *man/savePreprocessorToJsonString.Rd
-5af672cb70287be8c744fecfc38d8f71 *man/stochtree-package.Rd
+aeb043df445bae64a4dc93a53d55a592 *man/stochtree-package.Rd
 055c23c74d15deb97348966ce369cb3c *src/Makevars
 800a24b11d04ddfcf9079f6b02ff3f4f *src/R_data.cpp
 16d7820773d78ed83632621010a4c200 *src/R_random_effects.cpp
