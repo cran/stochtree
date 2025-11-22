@@ -13,12 +13,12 @@
 #include <stochtree/log.h>
 #include <stochtree/meta.h>
 #include <stochtree/normal_sampler.h>
+#include <stochtree/openmp_utils.h>
 #include <stochtree/partition_tracker.h>
 #include <stochtree/prior.h>
 #include <stochtree/tree.h>
 
 #include <random>
-#include <tuple>
 #include <variant>
 
 namespace StochTree {
@@ -73,10 +73,10 @@ namespace StochTree {
  * We assign each leaf node parameter a prior
  * 
  *  \f[
- *    \mu \sim \mathcal{N}\left(0, \tau\right)
+ *    \mu \sim N\left(0, \tau\right)
  *  \f]
  * 
- * Assuming a homoskedastic Gaussian outcome likelihood (i.e. \f$y_i \sim \mathcal{N}\left(f(X_i),\sigma^2\right)\f$), 
+ * Assuming a homoskedastic Gaussian outcome likelihood (i.e. \f$y_i \sim N\left(f(X_i),\sigma^2\right)\f$), 
  * the log marginal likelihood in this model, for the outcome data in node \f$\ell\f$ of tree \f$j\f$ is given by 
  * 
  *  \f[
@@ -106,14 +106,14 @@ namespace StochTree {
  * node \f$\ell\f$'s leaf parameter is similarly defined as:
  * 
  *  \f[
- *    \mu_{\ell} \mid - \sim \mathcal{N}\left(\frac{\tau s_{y,\ell}}{n_{\ell} \tau + \sigma^2}, \frac{\tau \sigma^2}{n_{\ell} \tau + \sigma^2}\right)
+ *    \mu_{\ell} \mid - \sim N\left(\frac{\tau s_{y,\ell}}{n_{\ell} \tau + \sigma^2}, \frac{\tau \sigma^2}{n_{\ell} \tau + \sigma^2}\right)
  *  \f]
  * 
  * Now, consider the possibility that each observation carries a unique weight \f$w_i\f$. These could be "case weights" in a survey context or 
  * individual-level variances ("heteroskedasticity"). These case weights transform the outcome distribution (and associated likelihood) to
  * 
  *  \f[
- *    y_i \mid - \sim \mathcal{N}\left(\mu(X_i), \frac{\sigma^2}{w_i}\right) 
+ *    y_i \mid - \sim N\left(\mu(X_i), \frac{\sigma^2}{w_i}\right) 
  *  \f]
  * 
  * This gives a modified log marginal likelihood of 
@@ -185,13 +185,13 @@ namespace StochTree {
  * and we assign \f$\beta_{\ell}\f$ a prior of
  * 
  *  \f[
- *    \vec{\beta_{\ell}} \sim \mathcal{N}\left(\vec{\beta_0}, \Sigma_0\right)
+ *    \vec{\beta_{\ell}} \sim N\left(\vec{\beta_0}, \Sigma_0\right)
  *  \f]
  * 
  * where \f$\vec{\beta_0}\f$ is typically a vector of zeros. The outcome likelihood is still
  * 
  *  \f[
- *    y_i \sim \mathcal{N}\left(f(X_i), \sigma^2\right)
+ *    y_i \sim N\left(f(X_i), \sigma^2\right)
  *  \f]
  * 
  * This gives a reduced log integrated likelihood of
@@ -203,7 +203,7 @@ namespace StochTree {
  * where \f$\Omega\f$ is a matrix of bases for every observation in leaf \f$\ell\f$ and \f$p\f$ is the dimension of \f$\Omega\f$. The posterior for \f$\vec{\beta_{\ell}}\f$ is 
  * 
  *  \f[
- *    \vec{\beta_{\ell}} \sim \mathcal{N}\left(\left(\Sigma_0^{-1} + \frac{\Omega'\Omega}{\sigma^2}\right)^{-1}\left(\frac{\Omega'y}{\sigma^2}\right),\left(\Sigma_0^{-1} + \frac{\Omega'\Omega}{\sigma^2}\right)^{-1}\right)
+ *    \vec{\beta_{\ell}} \sim N\left(\left(\Sigma_0^{-1} + \frac{\Omega'\Omega}{\sigma^2}\right)^{-1}\left(\frac{\Omega'y}{\sigma^2}\right),\left(\Sigma_0^{-1} + \frac{\Omega'\Omega}{\sigma^2}\right)^{-1}\right)
  *  \f]
  * 
  * This is an extension of the single-tree model of <a href="https://link.springer.com/article/10.1023/A:1013916107446">Chipman et al (2002)</a>, with:
@@ -226,7 +226,7 @@ namespace StochTree {
  * and a posterior for \f$\vec{\beta_{\ell}}\f$ of 
  * 
  *  \f[
- *    \vec{\beta_{\ell}} \sim \mathcal{N}\left(\left(\Sigma_{0}^{-1} + \Omega'\Sigma_{y}^{-1}\Omega\right)^{-1}\left(\Omega'\Sigma_{y}^{-1}y\right),\left(\Sigma_{0}^{-1} + \Omega'\Sigma_{y}^{-1}\Omega\right)^{-1}\right)
+ *    \vec{\beta_{\ell}} \sim N\left(\left(\Sigma_{0}^{-1} + \Omega'\Sigma_{y}^{-1}\Omega\right)^{-1}\left(\Omega'\Sigma_{y}^{-1}y\right),\left(\Sigma_{0}^{-1} + \Omega'\Sigma_{y}^{-1}\Omega\right)^{-1}\right)
  *  \f]
  *  
  * \section gaussian_univariate_regression_leaf_model Gaussian Univariate Regression Leaf Model
@@ -236,10 +236,10 @@ namespace StochTree {
  * parameter becomes univariate normal as in \ref gaussian_constant_leaf_model: 
  * 
  *  \f[
- *    \beta \sim \mathcal{N}\left(0, \tau\right)
+ *    \beta \sim N\left(0, \tau\right)
  *  \f]
  * 
- * Allowing for case / variance weights $w_i$ as above, we derive a reduced log marginal likelihood of 
+ * Allowing for case / variance weights \f$w_i\f$ as above, we derive a reduced log marginal likelihood of 
  * 
  *  \f[
  *    L(y) \propto \frac{1}{2} \log\left(\frac{\sigma^2}{s_{wxx,\ell} \tau + \sigma^2}\right) + \frac{\tau s_{wyx,\ell}^2}{2\sigma^2(s_{wxx,\ell} \tau + \sigma^2)}
@@ -258,7 +258,7 @@ namespace StochTree {
  * and a posterior of 
  * 
  *  \f[
- *    \beta_{\ell} \mid - \sim \mathcal{N}\left(\frac{\tau s_{wyx,\ell}}{s_{wxx,\ell} \tau + \sigma^2}, \frac{\tau \sigma^2}{s_{wxx,\ell} \tau + \sigma^2}\right)
+ *    \beta_{\ell} \mid - \sim N\left(\frac{\tau s_{wyx,\ell}}{s_{wxx,\ell} \tau + \sigma^2}, \frac{\tau \sigma^2}{s_{wxx,\ell} \tau + \sigma^2}\right)
  *  \f]
  * 
  * \section inverse_gamma_leaf_model Inverse Gamma Leaf Model
@@ -291,7 +291,7 @@ namespace StochTree {
  * Under an outcome model
  * 
  *  \f[
- *    y \sim \mathcal{N}\left(f(X), \sigma_0^2 \sigma^2(X)\right)
+ *    y \sim N\left(f(X), \sigma_0^2 \sigma^2(X)\right)
  *  \f]
  * 
  * updates to \f$\mu_{\ell}\f$ for a given tree \f$j\f$ are based on a reduced log marginal likelihood of
@@ -395,6 +395,16 @@ class GaussianConstantSuffStat {
     n = 0;
     sum_w = 0.0;
     sum_yw = 0.0;
+  }
+  /*!
+   * \brief Increment the value of each sufficient statistic by the values provided by `suff_stat`
+   * 
+   * \param suff_stat Sufficient statistic to be added to the current sufficient statistics
+   */
+  void AddSuffStatInplace(GaussianConstantSuffStat& suff_stat) {
+    n += suff_stat.n;
+    sum_w += suff_stat.sum_w;
+    sum_yw += suff_stat.sum_yw;
   }
   /*!
    * \brief Set the value of each sufficient statistic to the sum of the values provided by `lhs` and `rhs`
@@ -551,6 +561,16 @@ class GaussianUnivariateRegressionSuffStat {
     sum_yxw = 0.0;
   }
   /*!
+   * \brief Increment the value of each sufficient statistic by the values provided by `suff_stat`
+   * 
+   * \param suff_stat Sufficient statistic to be added to the current sufficient statistics
+   */
+  void AddSuffStatInplace(GaussianUnivariateRegressionSuffStat& suff_stat) {
+    n += suff_stat.n;
+    sum_xxw += suff_stat.sum_xxw;
+    sum_yxw += suff_stat.sum_yxw;
+  }
+  /*!
    * \brief Set the value of each sufficient statistic to the sum of the values provided by `lhs` and `rhs`
    * 
    * \param lhs First sufficient statistic ("left hand side")
@@ -696,6 +716,16 @@ class GaussianMultivariateRegressionSuffStat {
     ytWX = Eigen::MatrixXd::Zero(1, p);
   }
   /*!
+   * \brief Increment the value of each sufficient statistic by the values provided by `suff_stat`
+   * 
+   * \param suff_stat Sufficient statistic to be added to the current sufficient statistics
+   */
+  void AddSuffStatInplace(GaussianMultivariateRegressionSuffStat& suff_stat) {
+    n += suff_stat.n;
+    XtWX += suff_stat.XtWX;
+    ytWX += suff_stat.ytWX;
+  }
+  /*!
    * \brief Set the value of each sufficient statistic to the sum of the values provided by `lhs` and `rhs`
    * 
    * \param lhs First sufficient statistic ("left hand side")
@@ -828,6 +858,15 @@ class LogLinearVarianceSuffStat {
   void ResetSuffStat() {
     n = 0;
     weighted_sum_ei = 0.0;
+  }
+  /*!
+   * \brief Increment the value of each sufficient statistic by the values provided by `suff_stat`
+   * 
+   * \param suff_stat Sufficient statistic to be added to the current sufficient statistics
+   */
+  void AddSuffStatInplace(LogLinearVarianceSuffStat& suff_stat) {
+    n += suff_stat.n;
+    weighted_sum_ei += suff_stat.weighted_sum_ei;
   }
   /*!
    * \brief Set the value of each sufficient statistic to the sum of the values provided by `lhs` and `rhs`
@@ -1005,22 +1044,73 @@ static inline LeafModelVariant leafModelFactory(ModelType model_type, double tau
   }
 }
 
-template<typename SuffStatType>
-static inline void AccumulateSuffStatProposed(SuffStatType& node_suff_stat, SuffStatType& left_suff_stat, SuffStatType& right_suff_stat, ForestDataset& dataset, ForestTracker& tracker, 
-                                ColumnVector& residual, double global_variance, TreeSplit& split, int tree_num, int leaf_num, int split_feature) {
-  // Acquire iterators
-  auto node_begin_iter = tracker.UnsortedNodeBeginIterator(tree_num, leaf_num);
-  auto node_end_iter = tracker.UnsortedNodeEndIterator(tree_num, leaf_num);
+template<typename SuffStatType, typename... SuffStatConstructorArgs>
+static inline void AccumulateSuffStatProposed(
+  SuffStatType& node_suff_stat, SuffStatType& left_suff_stat, SuffStatType& right_suff_stat, ForestDataset& dataset, ForestTracker& tracker, 
+  ColumnVector& residual, double global_variance, TreeSplit& split, int tree_num, int leaf_num, int split_feature, int num_threads, 
+  SuffStatConstructorArgs&... suff_stat_args
+) {
+  // Determine the position of the node's indices in the forest tracking data structure
+  int node_begin_index = tracker.UnsortedNodeBegin(tree_num, leaf_num);
+  int node_end_index = tracker.UnsortedNodeEnd(tree_num, leaf_num);
 
-  // Accumulate sufficient statistics
-  for (auto i = node_begin_iter; i != node_end_iter; i++) {
-    auto idx = *i;
-    double feature_value = dataset.CovariateValue(idx, split_feature);
-    node_suff_stat.IncrementSuffStat(dataset, residual.GetData(), tracker, idx, tree_num);
-    if (split.SplitTrue(feature_value)) {
-      left_suff_stat.IncrementSuffStat(dataset, residual.GetData(), tracker, idx, tree_num);
-    } else {
-      right_suff_stat.IncrementSuffStat(dataset, residual.GetData(), tracker, idx, tree_num);
+  // Extract pointer to the feature partition for tree_num
+  UnsortedNodeSampleTracker* unsorted_node_sample_tracker = tracker.GetUnsortedNodeSampleTracker();
+  FeatureUnsortedPartition* feature_partition = unsorted_node_sample_tracker->GetFeaturePartition(tree_num);
+
+  // Determine the number of threads to use
+  int chunk_size = (node_end_index - node_begin_index) / num_threads;
+  if (chunk_size < 100) {
+    num_threads = 1;
+    chunk_size = node_end_index - node_begin_index;
+  }
+
+  if (num_threads > 1) {
+    // Split the work into num_threads chunks
+    std::vector<std::pair<int, int>> thread_ranges(num_threads);
+    std::vector<SuffStatType> thread_suff_stats_node;
+    std::vector<SuffStatType> thread_suff_stats_left;
+    std::vector<SuffStatType> thread_suff_stats_right;
+    for (int i = 0; i < num_threads; i++) {
+      thread_ranges[i] = std::make_pair(node_begin_index + i * chunk_size, 
+                                        node_begin_index + (i + 1) * chunk_size);
+      thread_suff_stats_node.emplace_back(suff_stat_args...);
+      thread_suff_stats_left.emplace_back(suff_stat_args...);
+      thread_suff_stats_right.emplace_back(suff_stat_args...);
+    }
+    
+    // Accumulate sufficient statistics
+    StochTree::ParallelFor(0, num_threads, num_threads, [&](int i) {
+      int start_idx = thread_ranges[i].first;
+      int end_idx = thread_ranges[i].second;
+      for (int idx = start_idx; idx < end_idx; idx++) {
+        int obs_num = feature_partition->indices_[idx];
+        double feature_value = dataset.CovariateValue(obs_num, split_feature);
+        thread_suff_stats_node[i].IncrementSuffStat(dataset, residual.GetData(), tracker, obs_num, tree_num);
+        if (split.SplitTrue(feature_value)) {
+          thread_suff_stats_left[i].IncrementSuffStat(dataset, residual.GetData(), tracker, obs_num, tree_num);
+        } else {
+          thread_suff_stats_right[i].IncrementSuffStat(dataset, residual.GetData(), tracker, obs_num, tree_num);
+        }
+      }
+    });
+
+    // Combine the thread-local sufficient statistics
+    for (int i = 0; i < num_threads; i++) {
+      node_suff_stat.AddSuffStatInplace(thread_suff_stats_node[i]);
+      left_suff_stat.AddSuffStatInplace(thread_suff_stats_left[i]);
+      right_suff_stat.AddSuffStatInplace(thread_suff_stats_right[i]);
+    }
+  } else {
+    for (int idx = node_begin_index; idx < node_end_index; idx++) {
+      int obs_num = feature_partition->indices_[idx];
+      double feature_value = dataset.CovariateValue(obs_num, split_feature);
+      node_suff_stat.IncrementSuffStat(dataset, residual.GetData(), tracker, obs_num, tree_num);
+      if (split.SplitTrue(feature_value)) {
+        left_suff_stat.IncrementSuffStat(dataset, residual.GetData(), tracker, obs_num, tree_num);
+      } else {
+        right_suff_stat.IncrementSuffStat(dataset, residual.GetData(), tracker, obs_num, tree_num);
+      }
     }
   }
 }

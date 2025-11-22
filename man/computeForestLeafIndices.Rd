@@ -8,6 +8,7 @@ computeForestLeafIndices(
   model_object,
   covariates,
   forest_type = NULL,
+  propensity = NULL,
   forest_inds = NULL
 )
 }
@@ -37,12 +38,14 @@ Valid inputs depend on the model type, and whether or not a given forest was sam
 \item \code{NULL}: It is not necessary to disambiguate when this function is called directly on a \code{ForestSamples} object. This is the default value of this
 }}
 
+\item{propensity}{(Optional) Propensities used for prediction (BCF-only).}
+
 \item{forest_inds}{(Optional) Indices of the forest sample(s) for which to compute leaf indices. If not provided,
 this function will return leaf indices for every sample of a forest.
 This function uses 0-indexing, so the first forest sample corresponds to \code{forest_num = 0}, and so on.}
 }
 \value{
-List of vectors. Each vector is of size \code{num_obs * num_trees}, where \code{num_obs = nrow(covariates)}
+Vector of size \code{num_obs * num_trees}, where \code{num_obs = nrow(covariates)}
 and \code{num_trees} is the number of trees in the relevant forest of \code{model_object}.
 }
 \description{
