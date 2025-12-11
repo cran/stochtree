@@ -835,6 +835,16 @@ bart <- function(
     }
   }
 
+  # Runtime checks for variance forest
+  if (include_variance_forest) {
+    if (sample_sigma2_global) {
+      warning(
+        "Global error variance will not be sampled with a heteroskedasticity forest"
+      )
+      sample_sigma2_global <- F
+    }
+  }
+
   # Handle standardization, prior calibration, and initialization of forest
   # differently for binary and continuous outcomes
   if (probit_outcome_model) {
@@ -2124,7 +2134,6 @@ predict.bartmodel <- function(
   X <- preprocessPredictionData(X, train_set_metadata)
 
   # Recode group IDs to integer vector (if passed as, for example, a vector of county names, etc...)
-  has_rfx <- FALSE
   if (predict_rfx) {
     if (!is.null(rfx_group_ids)) {
       rfx_unique_group_ids <- object$rfx_unique_group_ids
@@ -2135,7 +2144,6 @@ predict.bartmodel <- function(
         )
       }
       rfx_group_ids <- as.integer(group_ids_factor)
-      has_rfx <- TRUE
     }
   }
 
@@ -2218,6 +2226,11 @@ predict.bartmodel <- function(
       # Extract the raw RFX samples and scale by train set outcome standard deviation
       rfx_param_list <- object$rfx_samples$extract_parameter_samples()
       rfx_beta_draws <- rfx_param_list$beta_samples * y_std
+
+      # Promote to an array with consistent dimensions when there's one rfx term
+      if (length(dim(rfx_beta_draws)) == 2) {
+        dim(rfx_beta_draws) <- c(1, dim(rfx_beta_draws))
+      }
 
       # Construct a matrix with the appropriate group random effects arranged for each observation
       rfx_predictions_raw <- array(

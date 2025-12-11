@@ -1,9 +1,9 @@
-e19d3e192f11e3a1303b05b988b96c0d *DESCRIPTION
+ca9fe94e70a5bad7b1a53e1b17255c65 *DESCRIPTION
 3449f3cf486bc439d60223492ff75a38 *LICENSE
 d1a632bab19c276742baeee7ae9853b4 *NAMESPACE
-6e4a2767e189eeddb7238666796d9f73 *NEWS.md
-610ebeb0efb8cbe0064e369a4a4f1e1b *R/bart.R
-d9da7d3c9f2c8a886cfe1a76bb883550 *R/bcf.R
+8419bc7b682ce52f0fcbeb0903591088 *NEWS.md
+33126753fbbfa6ffb00804bf33436b97 *R/bart.R
+2357000e795337265e953a649fcc5791 *R/bcf.R
 9aa0733990fc0d17010f7fd1c9519f02 *R/calibration.R
 1bb31a04a22a5cb711cdebd7b8161028 *R/config.R
 cb8cce281a59ee265b94de445c1b09c1 *R/cpp11.R
@@ -12,7 +12,7 @@ bb49fa1bf56a3c955235fbb8e16e3e72 *R/forest.R
 a169d1825410a4a78bd4697f4c186aa6 *R/generics.R
 744ba30fd72e7674a752d3ee4985cf55 *R/kernel.R
 fa730a15aada27bb9b1b8b268755f14e *R/model.R
-97395fe11fc6c0f1d8d601c79148ae72 *R/posterior_transformation.R
+bae4a3d74d32d784c9ef58209af5ab6e *R/posterior_transformation.R
 d270eb5e943979d95a903c2791745f70 *R/random_effects.R
 ae52e3f1ab5cc3128cda56cc5550d634 *R/serialization.R
 93a56960f911e92f15ee0ef6b7de7075 *R/stochtree-package.R
@@ -21,8 +21,8 @@ bcd777ee659b5f3f5be1c16705692ae6 *R/utils.R
 3a67651e8815751c5dbe1789f6d519a7 *README.md
 76161b65639451c966be75488458b3c3 *build/partial.rdb
 6071edd604dbeb75308cfbedc7790398 *cleanup
-438dfe59330bf27a4a15c672a3e0a4f4 *configure
-d41c8405217e975306c987de50544a85 *configure.ac
+a4a8badbb3ab614db289bc0ea7236bec *configure
+53ade0dd5bf3da7ea04b0b9933a05aed *configure.ac
 2f5b36320110ac9897dd9c2da2023966 *configure.win
 b3944848d8f9305c2788071bd303f283 *inst/COPYRIGHTS
 2401679f3559d90317db71818fa63e32 *man/CppJson.Rd
@@ -483,6 +483,7 @@ e9565409127df0e96f3370538d920fa8 *src/partition_tracker.cpp
 39170febd5e6060f9da638139a8119dc *src/stochtree_types.h
 e0eb021d4ceecf505334a7d898f6df3e *src/tree.cpp
 6827d107a0e5bca3ff149fdbd40bdd1e *tests/testthat.R
+f23d507fbb2ce7cd9bbb4b375711fcfe *tests/testthat/test-api-combinations.R
 a226b87e98611edd2ac9ce2abe4c21f0 *tests/testthat/test-bart.R
 cc7b64f916d7a9dd11c69bed3c2ac2e3 *tests/testthat/test-bcf.R
 a36ee79b6f75373903d7b26836a36f88 *tests/testthat/test-categorical.R
@@ -490,7 +491,7 @@ f4421931d7c7e41f26341343ccc8ecc8 *tests/testthat/test-data-preprocessing.R
 edf29bb4b44e08078e07b3add748782b *tests/testthat/test-dataset.R
 cd5be80b39bb5bf3f13b53243cea8306 *tests/testthat/test-forest-container.R
 a04ad50ef8b7e1cbfd5bebbf0554e0fb *tests/testthat/test-forest.R
-e7fca223807223b1f9c6926d6fd5f431 *tests/testthat/test-predict.R
+0a85089db3e58ca94f6ccf2f908379df *tests/testthat/test-predict.R
 75e1946f960e43e3ae3d0d350e3449fd *tests/testthat/test-residual.R
 6597eabe4a8b67e68b38fa345d7ca2f9 *tests/testthat/test-serialization.R
 b7000c996f72233bbdb52fe1e7fc3781 *tests/testthat/test-utils.R
