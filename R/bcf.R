@@ -1,3 +1,5 @@
+#' @title Run BCF for Causal Effect Estimation
+#' @description
 #' Run the Bayesian Causal Forest (BCF) algorithm for regularized causal effect estimation.
 #'
 #' @param X_train Covariates used to split trees in the ensemble. May be provided either as a dataframe or a matrix.
@@ -373,12 +375,15 @@ bcf <- function(
 
   # Set a function-scoped RNG if user provided a random seed
   custom_rng <- random_seed >= 0
+  has_existing_random_seed <- F
   if (custom_rng) {
-    # Store original global environment RNG state
-    original_global_seed <- .Random.seed
+    # Cache original global environment RNG state (if it exists)
+    if (exists(".Random.seed", envir = .GlobalEnv)) {
+      original_global_seed <- .Random.seed
+      has_existing_random_seed <- T
+    }
     # Set new seed and store associated RNG state
     set.seed(random_seed)
-    function_scoped_seed <- .Random.seed
   }
 
   # Check if there are enough GFR samples to seed num_chains samplers
@@ -2780,12 +2785,18 @@ bcf <- function(
 
   # Restore global RNG state if user provided a random seed
   if (custom_rng) {
-    .Random.seed <- original_global_seed
+    if (has_existing_random_seed) {
+      .Random.seed <- original_global_seed
+    } else {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
   }
 
   return(result)
 }
 
+#' @title Predict From BCF Model
+#' @description
 #' Predict from a sampled BCF model on new data
 #'
 #' @param object Object of type `bcfmodel` containing draws of a Bayesian causal forest model and associated sampling outputs.
@@ -3040,7 +3051,6 @@ predict.bcfmodel <- function(
   X <- preprocessPredictionData(X, train_set_metadata)
 
   # Recode group IDs to integer vector (if passed as, for example, a vector of county names, etc...)
-  has_rfx <- FALSE
   if (!is.null(rfx_group_ids)) {
     rfx_unique_group_ids <- object$rfx_unique_group_ids
     group_ids_factor <- factor(rfx_group_ids, levels = rfx_unique_group_ids)
@@ -3050,7 +3060,6 @@ predict.bcfmodel <- function(
       )
     }
     rfx_group_ids <- as.integer(group_ids_factor)
-    has_rfx <- TRUE
   }
 
   # Handle RFX model specification
@@ -3354,6 +3363,559 @@ predict.bcfmodel <- function(
   return(result)
 }
 
+#' @title Print Summary of BCF Model
+#' @description Prints a summary of the BCF model, including the model terms and their specifications.
+#' @param x The BCF model object
+#' @param ... Additional arguments (currently unused)
+#' @export
+#' @return BCF model object unchanged after printing summary
+print.bcfmodel <- function(x, ...) {
+  # What type of model was run
+  model_terms <- c("prognostic forest", "treatment effect forest")
+  if (x$model_params$include_variance_forest) {
+    model_terms <- c(model_terms, "variance forest")
+  }
+  if (x$model_params$has_rfx) {
+    model_terms <- c(model_terms, "additive random effects")
+  }
+  if (x$model_params$sample_sigma2_global) {
+    model_terms <- c(model_terms, "global error variance model")
+  }
+  if (x$model_params$sample_sigma2_leaf_mu) {
+    model_terms <- c(model_terms, "prognostic forest leaf scale model")
+  }
+  if (x$model_params$sample_sigma2_leaf_tau) {
+    model_terms <- c(model_terms, "treatment effect forest leaf scale model")
+  }
+  if (length(model_terms) > 2) {
+    summary_message <- paste0(
+      "stochtree::bcf() run with ",
+      paste0(
+        paste0(model_terms[1:(length(model_terms) - 1)], collapse = ", "),
+        ", and ",
+        model_terms[length(model_terms)]
+      )
+    )
+  } else if (length(model_terms) == 2) {
+    summary_message <- paste0(
+      "stochtree::bcf() run with ",
+      paste0(model_terms, collapse = " and ")
+    )
+  } else {
+    summary_message <- paste0("stochtree::bcf() run with ", model_terms)
+  }
+
+  # Outcome details
+  summary_message <- paste0(
+    summary_message,
+    "\n",
+    "Outcome was modeled ",
+    ifelse(
+      x$model_params$probit_outcome_model,
+      "with a probit link",
+      "as gaussian"
+    )
+  )
+
+  # Treatment details
+  if (x$model_params$binary_treatment) {
+    summary_message <- paste0(
+      summary_message,
+      "\n",
+      "Treatment was binary and ",
+      ifelse(
+        x$model_params$adaptive_coding,
+        "its effect was estimated with adaptive coding",
+        "its effect was estimated with default coding"
+      )
+    )
+  } else if (x$model_params$multivariate_treatment) {
+    summary_message <- paste0(
+      summary_message,
+      "\n",
+      "Treatment was multivariate with ",
+      x$model_params$treatment_dim,
+      " dimensions"
+    )
+  } else {
+    summary_message <- paste0(
+      summary_message,
+      "\n",
+      "Treatment was univariate but not binary"
+    )
+  }
+
+  # Standardization
+  if (x$model_params$standardize) {
+    summary_message <- paste0(
+      summary_message,
+      "\n",
+      "outcome was standardized"
+    )
+  }
+
+  # Internal propensity model
+  if (x$model_params$propensity_covariate == "none") {
+    summary_message <- paste0(
+      summary_message,
+      "\n",
+      "Propensity scores were not used in either forest of the model"
+    )
+  } else {
+    if (x$model_params$internal_propensity_model) {
+      summary_message <- paste0(
+        summary_message,
+        "\n",
+        "An internal propensity model was fit using stochtree::bart() in lieu of user-provided propensity scores"
+      )
+    } else {
+      summary_message <- paste0(
+        summary_message,
+        "\n",
+        "User-provided propensity scores were included in the model"
+      )
+    }
+  }
+
+  # Random effects details
+  if (x$model_params$has_rfx) {
+    if (x$model_params$rfx_model_spec == "custom") {
+      summary_message <- paste0(
+        summary_message,
+        "\n",
+        "Random effects were fit with a user-supplied basis"
+      )
+    } else if (x$model_params$rfx_model_spec == "intercept_only") {
+      summary_message <- paste0(
+        summary_message,
+        "\n",
+        "Random effects were fit with an 'intercept-only' parameterization"
+      )
+    } else if (x$model_params$rfx_model_spec == "intercept_plus_treatment") {
+      summary_message <- paste0(
+        summary_message,
+        "\n",
+        "Random effects were fit with an 'intercept-plus-treatment' parameterization"
+      )
+    }
+  }
+
+  # Sampler details
+  summary_message <- paste0(
+    summary_message,
+    "\n",
+    "The sampler was run for ",
+    x$model_params$num_gfr,
+    " GFR iterations, with ",
+    x$model_params$num_chains,
+    ifelse(x$model_params$num_chains == 1, " chain of ", " chains of "),
+    x$model_params$num_burnin,
+    " burn-in iterations and ",
+    x$model_params$num_mcmc,
+    " MCMC iterations, ",
+    ifelse(
+      x$model_params$keep_every == 1,
+      "retaining every iteration (i.e. no thinning)",
+      paste0(
+        "retaining every ",
+        x$model_params$keep_every,
+        "th iteration (i.e. thinning)"
+      )
+    )
+  )
+
+  # Print the model details
+  cat(summary_message)
+
+  # Return bcf model invisibly
+  invisible(x)
+}
+
+#' @title Summarize BCF Model
+#' @description Summarize the BCF with a description of the model that was fit and numeric summaries of any sampled quantities.
+#' @param object The BCF model object
+#' @param ... Additional arguments
+#' @export
+#' @return BCF model object unchanged after summarizing
+summary.bcfmodel <- function(object, ...) {
+  # First, print the BCF model
+  tmp <- print(object)
+
+  # Summarize any sampled quantities
+
+  # Global error scale
+  if (object$model_params$sample_sigma2_global) {
+    sigma2_samples <- object$sigma2_global_samples
+    n_samples <- length(sigma2_samples)
+    mean_sigma2 <- mean(sigma2_samples)
+    sd_sigma2 <- sd(sigma2_samples)
+    quantiles_sigma2 <- quantile(
+      sigma2_samples,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    cat(sprintf(
+      "Summary of sigma^2 posterior: \n%d samples, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      n_samples,
+      mean_sigma2,
+      sd_sigma2
+    ))
+    print(quantiles_sigma2)
+  }
+
+  # Leaf scale for the prognostic forest
+  if (object$model_params$sample_sigma2_leaf_mu) {
+    sigma2_leaf_samples <- object$sigma2_leaf_mu_samples
+    n_samples <- length(sigma2_leaf_samples)
+    mean_sigma2 <- mean(sigma2_leaf_samples)
+    sd_sigma2 <- sd(sigma2_leaf_samples)
+    quantiles_sigma2 <- quantile(
+      sigma2_leaf_samples,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    cat(sprintf(
+      "Summary of prognostic forest leaf scale posterior: \n%d samples, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      n_samples,
+      mean_sigma2,
+      sd_sigma2
+    ))
+    print(quantiles_sigma2)
+  }
+
+  # Leaf scale for the treatment effect forest
+  if (object$model_params$sample_sigma2_leaf_tau) {
+    sigma2_leaf_samples <- object$sigma2_leaf_tau_samples
+    n_samples <- length(sigma2_leaf_samples)
+    mean_sigma2 <- mean(sigma2_leaf_samples)
+    sd_sigma2 <- sd(sigma2_leaf_samples)
+    quantiles_sigma2 <- quantile(
+      sigma2_leaf_samples,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    cat(sprintf(
+      "Summary of treatment effect forest leaf scale posterior: \n%d samples, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      n_samples,
+      mean_sigma2,
+      sd_sigma2
+    ))
+    print(quantiles_sigma2)
+  }
+
+  # Adaptive coding parameters
+  if (object$model_params$adaptive_coding) {
+    b0_samples <- object$b_0_samples
+    b1_samples <- object$b_1_samples
+    n_samples <- length(b0_samples)
+    mean_b0 <- mean(b0_samples)
+    mean_b1 <- mean(b1_samples)
+    sd_b0 <- sd(b0_samples)
+    sd_b1 <- sd(b1_samples)
+    quantiles_b0 <- quantile(
+      b0_samples,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    quantiles_b1 <- quantile(
+      b1_samples,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    cat(sprintf(
+      "Summary of adaptive coding parameters: \n%d samples, mean (control) = %.3f, mean (treated) = %.3f, standard deviation (control) = %.3f, standard deviation (treated) = %.3f\n",
+      n_samples,
+      mean_b0,
+      mean_b1,
+      sd_b0,
+      sd_b1
+    ))
+    cat("quantiles (control):\n")
+    print(quantiles_b0)
+    cat("quantiles (treated):\n")
+    print(quantiles_b1)
+  }
+
+  # In-sample predictions
+  if (!is.null(object$y_hat_train)) {
+    y_hat_train_mean <- rowMeans(object$y_hat_train)
+    n_y_hat_train <- length(y_hat_train_mean)
+    mean_y_hat_train <- mean(y_hat_train_mean)
+    sd_y_hat_train <- sd(y_hat_train_mean)
+    quantiles_y_hat_train <- quantile(
+      y_hat_train_mean,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    cat(sprintf(
+      "Summary of in-sample posterior mean predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      n_y_hat_train,
+      mean_y_hat_train,
+      sd_y_hat_train
+    ))
+    print(quantiles_y_hat_train)
+  }
+
+  # Test-set predictions
+  if (!is.null(object$y_hat_test)) {
+    y_hat_test_mean <- rowMeans(object$y_hat_test)
+    n_y_hat_test <- length(y_hat_test_mean)
+    mean_y_hat_test <- mean(y_hat_test_mean)
+    sd_y_hat_test <- sd(y_hat_test_mean)
+    quantiles_y_hat_test <- quantile(
+      y_hat_test_mean,
+      probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+    )
+    cat(sprintf(
+      "Summary of test-set posterior mean predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      n_y_hat_test,
+      mean_y_hat_test,
+      sd_y_hat_test
+    ))
+    print(quantiles_y_hat_test)
+  }
+
+  # In-sample treatment effect function estimates
+  if (!is.null(object$tau_hat_train)) {
+    if (!object$model_params$multivariate_treatment) {
+      tau_hat_train_mean <- rowMeans(object$tau_hat_train)
+      n_tau_hat_train <- length(tau_hat_train_mean)
+      mean_tau_hat_train <- mean(tau_hat_train_mean)
+      sd_tau_hat_train <- sd(tau_hat_train_mean)
+      quantiles_tau_hat_train <- quantile(
+        tau_hat_train_mean,
+        probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+      )
+      cat(sprintf(
+        "Summary of in-sample posterior mean CATEs: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+        n_tau_hat_train,
+        mean_tau_hat_train,
+        sd_tau_hat_train
+      ))
+      print(quantiles_tau_hat_train)
+    }
+  }
+
+  # Test set treatment effect function estimates
+  if (!is.null(object$tau_hat_test)) {
+    if (!object$model_params$multivariate_treatment) {
+      tau_hat_test_mean <- rowMeans(object$tau_hat_test)
+      n_tau_hat_test <- length(tau_hat_test_mean)
+      mean_tau_hat_test <- mean(tau_hat_test_mean)
+      sd_tau_hat_test <- sd(tau_hat_test_mean)
+      quantiles_tau_hat_test <- quantile(
+        tau_hat_test_mean,
+        probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+      )
+      cat(sprintf(
+        "Summary of test-set posterior mean CATEs: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+        n_tau_hat_test,
+        mean_tau_hat_test,
+        sd_tau_hat_test
+      ))
+      print(quantiles_tau_hat_test)
+    }
+  }
+
+  # Random effects
+  # TODO: add random effects summaries once indexing is fixed
+  if (object$model_params$has_rfx) {
+    # rfx_summary <- getRandomEffectSamples(object)
+    # ...
+  }
+
+  # Return bcf model invisibly
+  invisible(object)
+}
+
+#' @title Plot BCF Model
+#' @description Plot the BCF model fit and any relevant sampled quantities. This will default to a traceplot of the global error scale and the in-sample mean forest predictions for the first train set observation. Since `stochtree::bcf()` is flexible and it's possible to sample a model with a fixed global error scale and no mean forest, this procedure will throw an error if these two default terms are omitted.
+#' @param x The BCF model object
+#' @param ... Additional arguments
+#' @export
+#' @return BCF model object unchanged after summarizing
+plot.bcfmodel <- function(x, ...) {
+  # Check if model has global error scale samples
+  has_sigma2_samples <- x$model_params$sample_sigma2_global
+  has_mean_forest_preds <- !is.null(x$y_hat_train)
+
+  # First try combinations of sigma2 and mean forest predictions
+  if (has_sigma2_samples || has_mean_forest_preds) {
+    if (has_sigma2_samples) {
+      plot(
+        x$sigma2_global_samples,
+        type = "l",
+        ylab = "Sigma^2",
+        main = "Global error scale traceplot"
+      )
+    } else if (has_mean_forest_preds) {
+      plot(
+        x$y_hat_train[1, ],
+        type = "l",
+        ylab = "Predictions",
+        main = "In-sample mean function trace for the first train set observation"
+      )
+    }
+  } else {
+    stop(
+      "This model does not have enough model terms / parameter traces to produce stochtree's default plots. See `predict.bcfmodel()` for examples of how to further investigate your model."
+    )
+  }
+
+  # Return bcf model invisibly
+  invisible(x)
+}
+
+#' @title Extract BCF Parameter Samples
+#' @description Extract a vector, matrix or array of parameter samples from a BCF model by name.
+#' Random effects are handled by a separate `getRandomEffectSamples` function due to the complexity of the random effects parameters.
+#' If the requested model term is not found, an error is thrown.
+#' The following conventions are used for parameter names:
+#' - Global error variance: `"sigma2"`, `"global_error_scale"`, `"sigma2_global"`
+#' - Prognostic forest leaf scale: `"sigma2_leaf_mu"`, `"leaf_scale_mu"`, `"mu_leaf_scale"`
+#' - Treatment effect forest leaf scale: `"sigma2_leaf_tau"`, `"leaf_scale_tau"`, `"tau_leaf_scale"`
+#' - Adaptive coding parameters: `"adaptive_coding"` (returns both the control and treated parameters jointly, with control in the first row and treated in the second row)
+#' - In-sample mean function predictions: `"y_hat_train"`
+#' - Test set mean function predictions: `"y_hat_test"`
+#' - In-sample treatment effect forest predictions: `"tau_hat_train"`
+#' - Test set treatment effect forest predictions: `"tau_hat_test"`
+#' - In-sample variance forest predictions: `"sigma2_x_train"`, `"var_x_train"`
+#' - Test set variance forest predictions: `"sigma2_x_test"`, `"var_x_test"`
+#'
+#' @param object Object of type `bcfmodel` containing draws of a BCF model and associated sampling outputs.
+#' @param term Name of the parameter to extract (e.g., `"sigma2"`, `"y_hat_train"`, etc.)
+#' @return Array of parameter samples. If the underlying parameter is a scalar, this will be a vector of length `num_samples`.
+#' If the underlying parameter is vector-valued, this will be (`parameter_dimension` x `num_samples`) matrix, and if the underlying
+#' parameter is multidimensional, this will be an array of dimension (`parameter_dimension_1` x `parameter_dimension_2` x ... x `num_samples`).
+#' @export
+#'
+#' @examples
+#' n <- 500
+#' p <- 5
+#' X <- matrix(runif(n*p), ncol = p)
+#' mu_x <- (
+#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
+#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
+#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
+#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
+#' )
+#' pi_x <- (
+#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (0.2) +
+#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (0.4) +
+#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (0.6) +
+#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (0.8)
+#' )
+#' tau_x <- (
+#'     ((0 <= X[,2]) & (0.25 > X[,2])) * (0.5) +
+#'     ((0.25 <= X[,2]) & (0.5 > X[,2])) * (1.0) +
+#'     ((0.5 <= X[,2]) & (0.75 > X[,2])) * (1.5) +
+#'     ((0.75 <= X[,2]) & (1 > X[,2])) * (2.0)
+#' )
+#' Z <- rbinom(n, 1, pi_x)
+#' E_XZ <- mu_x + Z*tau_x
+#' snr <- 3
+#' rfx_group_ids <- rep(c(1,2), n %/% 2)
+#' rfx_coefs <- matrix(c(-1, -1, 1, 1), nrow=2, byrow=TRUE)
+#' rfx_basis <- cbind(1, runif(n, -1, 1))
+#' rfx_term <- rowSums(rfx_coefs[rfx_group_ids,] * rfx_basis)
+#' y <- E_XZ + rfx_term + rnorm(n, 0, 1)*(sd(E_XZ)/snr)
+#' bcf_model <- bcf(X_train = X, y_train = y, Z_train = Z,
+#'                  rfx_group_ids_train = rfx_group_ids,
+#'                  rfx_basis_train = rfx_basis,
+#'                  num_gfr = 10, num_burnin = 0, num_mcmc = 10)
+#' sigma2_samples <- extract_parameter(bcf_model, "sigma2")
+extract_parameter.bcfmodel <- function(object, term) {
+  if (term %in% c("sigma2", "global_error_scale", "sigma2_global")) {
+    if (!is.null(object$sigma2_global_samples)) {
+      return(object$sigma2_global_samples)
+    } else {
+      stop("This model does not have global variance parameter samples")
+    }
+  }
+
+  if (term %in% c("sigma2_leaf_mu", "leaf_scale_mu", "mu_leaf_scale")) {
+    if (!is.null(object$sigma2_leaf_mu_samples)) {
+      return(object$sigma2_leaf_mu_samples)
+    } else {
+      stop(
+        "This model does not have prognostic forest leaf variance parameter samples"
+      )
+    }
+  }
+
+  if (term %in% c("sigma2_leaf_tau", "leaf_scale_tau", "tau_leaf_scale")) {
+    if (!is.null(object$sigma2_leaf_tau_samples)) {
+      return(object$sigma2_leaf_tau_samples)
+    } else {
+      stop(
+        "This model does not have treatment effect forest leaf variance parameter samples"
+      )
+    }
+  }
+
+  if (term %in% c("adaptive_coding")) {
+    if (object$model_params$adaptive_coding) {
+      b0_samples <- object$b_0_samples
+      b1_samples <- object$b_1_samples
+      return(unname(rbind(b0_samples, b1_samples)))
+    } else {
+      stop("This model does not have adaptive coding parameter samples")
+    }
+  }
+
+  if (term %in% c("y_hat_train")) {
+    if (!is.null(object$y_hat_train)) {
+      return(object$y_hat_train)
+    } else {
+      stop(
+        "This model does not have in-sample mean function prediction samples"
+      )
+    }
+  }
+
+  if (term %in% c("y_hat_test")) {
+    if (!is.null(object$y_hat_test)) {
+      return(object$y_hat_test)
+    } else {
+      stop("This model does not have test set mean function prediction samples")
+    }
+  }
+
+  if (term %in% c("tau_hat_train")) {
+    if (!is.null(object$tau_hat_train)) {
+      return(object$tau_hat_train)
+    } else {
+      stop(
+        "This model does not have in-sample treatment effect forest predictions"
+      )
+    }
+  }
+
+  if (term %in% c("tau_hat_test")) {
+    if (!is.null(object$tau_hat_test)) {
+      return(object$tau_hat_test)
+    } else {
+      stop(
+        "This model does not have test set treatment effect forest predictions"
+      )
+    }
+  }
+
+  if (term %in% c("sigma2_x_train", "var_x_train")) {
+    if (!is.null(object$sigma2_x_train)) {
+      return(object$sigma2_x_train)
+    } else {
+      stop("This model does not have in-sample variance forest predictions")
+    }
+  }
+
+  if (term %in% c("sigma2_x_test", "var_x_test")) {
+    if (!is.null(object$sigma2_x_test)) {
+      return(object$sigma2_x_test)
+    } else {
+      stop("This model does not have test set variance forest predictions")
+    }
+  }
+
+  stop(paste0("term ", term, " is not a valid BCF model term"))
+}
+
+#' @title Extract Random Effect Samples from BCF Model
+#' @description
 #' Extract raw sample values for each of the random effect parameter terms.
 #'
 #' @param object Object of type `bcfmodel` containing draws of a Bayesian causal forest model and associated sampling outputs.
@@ -3452,6 +4014,8 @@ getRandomEffectSamples.bcfmodel <- function(object, ...) {
   return(result)
 }
 
+#' @title Convert BCF Model to JSON
+#' @description
 #' Convert the persistent aspects of a BCF model to (in-memory) JSON
 #'
 #' @param object Object of type `bcfmodel` containing draws of a Bayesian causal forest model and associated sampling outputs.
@@ -3687,6 +4251,8 @@ saveBCFModelToJson <- function(object) {
   return(jsonobj)
 }
 
+#' @title Save BCF Model to JSON File
+#' @description
 #' Convert the persistent aspects of a BCF model to (in-memory) JSON and save to a file
 #'
 #' @param object Object of type `bcfmodel` containing draws of a Bayesian causal forest model and associated sampling outputs.
@@ -3771,6 +4337,8 @@ saveBCFModelToJsonFile <- function(object, filename) {
   jsonobj$save_file(filename)
 }
 
+#' @title Convert BCF Model to JSON String
+#' @description
 #' Convert the persistent aspects of a BCF model to (in-memory) JSON string
 #'
 #' @param object Object of type `bcfmodel` containing draws of a Bayesian causal forest model and associated sampling outputs.
@@ -3851,6 +4419,8 @@ saveBCFModelToJsonString <- function(object) {
   return(jsonobj$return_json_string())
 }
 
+#' @title Convert JSON to BCF Model
+#' @description
 #' Convert an (in-memory) JSON representation of a BCF model to a BCF model object
 #' which can be used for prediction, etc...
 #'
@@ -4087,6 +4657,8 @@ createBCFModelFromJson <- function(json_object) {
   return(output)
 }
 
+#' @title Convert JSON File to BCF Model
+#' @description
 #' Convert a JSON file containing sample information on a trained BCF model
 #' to a BCF model object which can be used for prediction, etc...
 #'
@@ -4174,6 +4746,8 @@ createBCFModelFromJsonFile <- function(json_filename) {
   return(bcf_object)
 }
 
+#' @title Convert JSON String to BCF Model
+#' @description
 #' Convert a JSON string containing sample information on a trained BCF model
 #' to a BCF model object which can be used for prediction, etc...
 #'
@@ -4255,6 +4829,8 @@ createBCFModelFromJsonString <- function(json_string) {
   return(bcf_object)
 }
 
+#' @title Convert JSON List to BCF Model
+#' @description
 #' Convert a list of (in-memory) JSON strings that represent BCF models to a single combined BCF model object
 #' which can be used for prediction, etc...
 #'
@@ -4597,6 +5173,8 @@ createBCFModelFromCombinedJson <- function(json_object_list) {
   return(output)
 }
 
+#' @title Convert JSON String List to BCF Model
+#' @description
 #' Convert a list of (in-memory) JSON strings that represent BCF models to a single combined BCF model object
 #' which can be used for prediction, etc...
 #'

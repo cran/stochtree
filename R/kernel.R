@@ -1,5 +1,4 @@
-#' Compute vector of forest leaf indices
-#'
+#' @title Query Forest Leaf Indices
 #' @description Compute and return a vector representation of a forest's leaf predictions for
 #' every observation in a dataset.
 #'
@@ -157,12 +156,15 @@ computeForestLeafIndices <- function(
   return(leaf_ind_matrix)
 }
 
-#' Compute vector of forest leaf scale parameters
-#'
+#' @title Query Forest Leaf Scale Parameters
 #' @description Return each forest's leaf node scale parameters.
 #'
 #' If leaf scale is not sampled for the forest in question, throws an error that the
 #' leaf model does not have a stochastic scale parameter.
+#'
+#' This function is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
+#' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
 #'
 #' @param model_object Object of type `bartmodel` or `bcfmodel` corresponding to a BART / BCF model with at least one forest sample
 #' @param forest_type Which forest to use from `model_object`.
@@ -269,6 +271,8 @@ computeForestLeafVariances <- function(
   return(leaf_scale_params)
 }
 
+#' @title Query Forest Max Leaf Index
+#' @description
 #' Compute and return the largest possible leaf index computable by `computeForestLeafIndices` for the forests in a designated forest sample container.
 #'
 #' @param model_object Object of type `bartmodel`, `bcfmodel`, or `ForestSamples` corresponding to a BART / BCF model with at least one forest sample, or a low-level `ForestSamples` object.

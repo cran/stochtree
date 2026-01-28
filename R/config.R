@@ -1,13 +1,18 @@
-#' Object used to get / set parameters and other model configuration options
-#' for a forest model in the "low-level" stochtree interface
+#' @title Forest Model Configuration Object
 #'
 #' @description
+#' Object used to get / set parameters and other model configuration options
+#' for a forest model in the "low-level" stochtree interface.
 #' The "low-level" stochtree interface enables a high degreee of sampler
 #' customization, in which users employ R wrappers around C++ objects
 #' like ForestDataset, Outcome, CppRng, and ForestModel to run the
 #' Gibbs sampler of a BART model with custom modifications.
 #' ForestModelConfig allows users to specify / query the parameters of a
 #' forest model they wish to run.
+#'
+#' This class is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
+#' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
 
 ForestModelConfig <- R6::R6Class(
   classname = "ForestModelConfig",
@@ -429,16 +434,21 @@ ForestModelConfig <- R6::R6Class(
   )
 )
 
-#' Object used to get / set global parameters and other global model
-#' configuration options in the "low-level" stochtree interface
+#' @title Global Model Configuration Object
 #'
 #' @description
+#' Object used to get / set global parameters and other global model
+#' configuration options in the "low-level" stochtree interface.
 #' The "low-level" stochtree interface enables a high degreee of sampler
 #' customization, in which users employ R wrappers around C++ objects
 #' like ForestDataset, Outcome, CppRng, and ForestModel to run the
 #' Gibbs sampler of a BART model with custom modifications.
 #' GlobalModelConfig allows users to specify / query the global parameters
 #' of a model they wish to run.
+#'
+#' This class is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
+#' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
 
 GlobalModelConfig <- R6::R6Class(
   classname = "GlobalModelConfig",
@@ -472,7 +482,13 @@ GlobalModelConfig <- R6::R6Class(
   )
 )
 
+#' @title Create ForestModelConfig Object
+#' @description
 #' Create a forest model config object
+#'
+#' This function is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
+#' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
 #'
 #' @param feature_types Vector of integer-coded feature types (integers where 0 = numeric, 1 = ordered categorical, 2 = unordered categorical)
 #' @param sweep_update_indices Vector of (0-indexed) indices of trees to update in a sweep
@@ -538,7 +554,13 @@ createForestModelConfig <- function(
   ))
 }
 
+#' @title Create GlobalModelConfig Object
+#' @description
 #' Create a global model config object
+#'
+#' This function is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
+#' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
 #'
 #' @param global_error_variance Global error variance parameter (default: `1.0`)
 #' @return GlobalModelConfig object
