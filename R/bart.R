@@ -1,4 +1,66 @@
-#' @title Run BART for Supervised Learning
+#' BART Serialization Routines
+#' @name BARTSerialization
+#' @description
+#' BART models contains external pointers to C++ objects, which means they cannot
+#' be correctly serialized to `.Rds` from an R session in their default state.
+#' This group of serialization functions allow us to convert between C++ data structures and a persistent JSON
+#' representation. The `CppJson` class wraps a performant C++ JSON API, and the functions
+#' `saveBARTModelToJson` and `createBARTModelFromJson` save to and load from this format.
+#' This representation, of course, also relies on external C++ pointers, so in order to
+#' save and reload BART models across sessions, we provide two other interfaces.
+#'
+#' `saveBARTModelToJsonString` converts a BART model to an in-memory string containing the model's
+#' JSON representation and `createBARTModelFromJsonString` converts this representation back to a BART model object.
+#'
+#' `saveBARTModelToJsonFile` and `createBARTModelFromJsonFile` save or reload a BART model
+#' directly to / from a `.json` file.
+#'
+#' Finally, for cases in which multiple BART models have been sampled (for instance, multiple processes
+#' run via `doParallel`), we offer `createBARTModelFromCombinedJson` and `createBARTModelFromCombinedJsonString` for
+#' loading a new combined BART model from a list of BART JSON objects / strings.
+#' @returns
+#' `saveBARTModelToJson` return an object of type `CppJson`.
+#' `saveBARTModelToJsonString` returns a string dump of the BART model's JSON representation.
+#' `saveBARTModelToJsonFile` returns nothing, but writes to the provided filename.
+#'
+#' `createBARTModelFromJson`, `createBARTModelFromJsonFile`, `createBARTModelFromJsonString`,
+#' `createBARTModelFromCombinedJson`, and `createBARTModelFromCombinedJsonString` all return
+#' objects of type `bartmodel`.
+#' @examples
+#' # Generate data
+#' n <- 100
+#' p <- 5
+#' X <- matrix(runif(n*p), ncol = p)
+#' y <- X[,1] + rnorm(n, 0, 1)
+#'
+#' # Sample BART model
+#' bart_model <- bart(X_train = X, y_train = y, num_gfr = 0,
+#'                    num_burnin = 0, num_mcmc = 10)
+#'
+#' # Save to in-memory JSON
+#' bart_json <- saveBARTModelToJson(bart_model)
+#' # Save to JSON string
+#' bart_json_string <- saveBARTModelToJsonString(bart_model)
+#' # Save to JSON file
+#' tmpjson <- tempfile(fileext = ".json")
+#' saveBARTModelToJsonFile(bart_model, file.path(tmpjson))
+#'
+#' # Reload BART model from in-memory JSON object
+#' bart_model_roundtrip <- createBARTModelFromJson(bart_json)
+#' # Reload BART model from JSON string
+#' bart_model_roundtrip <- createBARTModelFromJsonString(bart_json_string)
+#' # Reload BART model from JSON file
+#' bart_model_roundtrip <- createBARTModelFromJsonFile(file.path(tmpjson))
+#' unlink(tmpjson)
+#' # Reload BART model from list of JSON objects
+#' bart_model_roundtrip <- createBARTModelFromCombinedJson(list(bart_json))
+#' # Reload BART model from list of JSON strings
+#' bart_model_roundtrip <- createBARTModelFromCombinedJsonString(list(bart_json_string))
+#'
+NULL
+#> NULL
+
+#' @title Run BART for supervised learning
 #' @description
 #' Run the BART algorithm for supervised learning.
 #'
@@ -46,7 +108,8 @@
 #'   - `keep_every` How many iterations of the burned-in MCMC sampler should be run before forests and parameters are retained. Default `1`. Setting `keep_every <- k` for some `k > 1` will "thin" the MCMC samples by retaining every `k`-th sample, rather than simply every sample. This can reduce the autocorrelation of the MCMC samples.
 #'   - `num_chains` How many independent MCMC chains should be sampled. If `num_mcmc = 0`, this is ignored. If `num_gfr = 0`, then each chain is run from root for `num_mcmc * keep_every + num_burnin` iterations, with `num_mcmc` samples retained. If `num_gfr > 0`, each MCMC chain will be initialized from a separate GFR ensemble, with the requirement that `num_gfr >= num_chains`. Default: `1`. Note that if `num_chains > 1`, the returned model object will contain samples from all chains, stored consecutively. That is, if there are 4 chains with 100 samples each, the first 100 samples will be from chain 1, the next 100 samples will be from chain 2, etc... For more detail on working with multi-chain BART models, see [the multi chain vignette](https://stochtree.ai/R_docs/pkgdown/articles/MultiChain.html).
 #'   - `verbose` Whether or not to print progress during the sampling loops. Default: `FALSE`.
-#'   - `probit_outcome_model` Whether or not the outcome should be modeled as explicitly binary via a probit link. If `TRUE`, `y` must only contain the values `0` and `1`. Default: `FALSE`.
+#'   - `outcome_model` A structured `OutcomeModel` object that specifies the outcome type and desired link function. This argument pre-empts the legacy (deprecated) `probit_outcome_model` option. Default: `OutcomeModel(outcome='continuous', link='identity')`.
+#'   - `probit_outcome_model` Deprecated in favor of `outcome_model`. Whether or not the outcome should be modeled as explicitly binary via a probit link. If `TRUE`, `y` must only contain the values `0` and `1`. Default: `FALSE`.
 #'   - `num_threads` Number of threads to use in the GFR and MCMC algorithms, as well as prediction. If OpenMP is not available on a user's setup, this will default to `1`, otherwise to the maximum number of available threads.
 #'
 #' @param mean_forest_params (Optional) A list of mean forest model parameters, each of which has a default value processed internally, so this argument list is optional.
@@ -151,6 +214,7 @@ bart <- function(
     keep_every = 1,
     num_chains = 1,
     verbose = FALSE,
+    outcome_model = OutcomeModel(outcome = "continuous", link = "identity"),
     probit_outcome_model = FALSE,
     num_threads = -1
   )
@@ -158,6 +222,7 @@ bart <- function(
     general_params_default,
     general_params
   )
+  # TODO: think about validation and deprecation flow for probit_outcome_model
 
   # Update mean forest BART parameters
   mean_forest_params_default <- list(
@@ -172,7 +237,9 @@ bart <- function(
     sigma2_leaf_scale = NULL,
     keep_vars = NULL,
     drop_vars = NULL,
-    num_features_subsample = NULL
+    num_features_subsample = NULL,
+    cloglog_leaf_prior_shape = 2.0,
+    cloglog_leaf_prior_scale = 2.0
   )
   mean_forest_params_updated <- preprocessParams(
     mean_forest_params_default,
@@ -229,6 +296,7 @@ bart <- function(
   keep_every <- general_params_updated$keep_every
   num_chains <- general_params_updated$num_chains
   verbose <- general_params_updated$verbose
+  outcome_model <- general_params_updated$outcome_model
   probit_outcome_model <- general_params_updated$probit_outcome_model
   num_threads <- general_params_updated$num_threads
 
@@ -245,6 +313,8 @@ bart <- function(
   keep_vars_mean <- mean_forest_params_updated$keep_vars
   drop_vars_mean <- mean_forest_params_updated$drop_vars
   num_features_subsample_mean <- mean_forest_params_updated$num_features_subsample
+  cloglog_leaf_prior_shape <- mean_forest_params_updated$cloglog_leaf_prior_shape
+  cloglog_leaf_prior_scale <- mean_forest_params_updated$cloglog_leaf_prior_scale
 
   # 3. Variance forest parameters
   num_trees_variance <- variance_forest_params_updated$num_trees
@@ -268,6 +338,49 @@ bart <- function(
   rfx_group_parameter_prior_cov <- rfx_params_updated$group_parameter_prior_cov
   rfx_variance_prior_shape <- rfx_params_updated$variance_prior_shape
   rfx_variance_prior_scale <- rfx_params_updated$variance_prior_scale
+
+  # Raise a deprecation warning to use `outcome_model` if `probit_outcome_model = TRUE` is specified
+  if (probit_outcome_model) {
+    warning(
+      "Specifying a probit link through `general_params = list(probit_outcome_model = TRUE)` is deprecated and will be removed in a future version. Please use `general_params = list(outcome_model = OutcomeModel(outcome = 'binary', link = 'probit'))` instead."
+    )
+  }
+
+  # Unpack outcome model details
+  link_is_linear <- FALSE
+  link_is_probit <- FALSE
+  link_is_cloglog <- FALSE
+  outcome_is_continuous <- FALSE
+  outcome_is_binary <- FALSE
+  outcome_is_ordinal <- FALSE
+  if (
+    outcome_model$outcome == "continuous" && outcome_model$link == "identity"
+  ) {
+    link_is_linear <- TRUE
+    outcome_is_continuous <- TRUE
+  } else if (
+    outcome_model$outcome == "binary" && outcome_model$link == "probit"
+  ) {
+    link_is_probit <- TRUE
+    outcome_is_binary <- TRUE
+  } else if (
+    outcome_model$outcome == "binary" && outcome_model$link == "cloglog"
+  ) {
+    link_is_cloglog <- TRUE
+    outcome_is_binary <- TRUE
+  } else if (
+    outcome_model$outcome == "ordinal" && outcome_model$link == "cloglog"
+  ) {
+    link_is_cloglog <- TRUE
+    outcome_is_ordinal <- TRUE
+  } else {
+    stop(paste0(
+      "Invalid outcome model specification, outcome = ",
+      outcome_model$outcome,
+      ", link = ",
+      outcome_model$link
+    ))
+  }
 
   # Set a function-scoped RNG if user provided a random seed
   custom_rng <- random_seed >= 0
@@ -356,6 +469,13 @@ bart <- function(
     } else {
       previous_rfx_samples <- NULL
     }
+    if (previous_bart_model$model_params$outcome_model$link == "cloglog") {
+      previous_cloglog_cutpoint_samples <- previous_bart_model$cloglog_cutpoint_samples
+      previous_cloglog_num_categories <- previous_bart_model$cloglog_num_categories
+    } else {
+      previous_cloglog_cutpoint_samples <- NULL
+      previous_cloglog_num_categories <- 0
+    }
     previous_model_num_samples <- previous_bart_model$model_params$num_samples
     if (previous_model_warmstart_sample_num > previous_model_num_samples) {
       stop(
@@ -370,6 +490,8 @@ bart <- function(
     previous_rfx_samples <- NULL
     previous_forest_samples_mean <- NULL
     previous_forest_samples_variance <- NULL
+    previous_cloglog_cutpoint_samples <- NULL
+    previous_cloglog_num_categories <- 0
     previous_model_num_samples <- 0
   }
 
@@ -815,18 +937,19 @@ bart <- function(
 
   # Preliminary runtime checks for probit link
   if (!include_mean_forest) {
-    probit_outcome_model <- FALSE
+    link_is_probit <- FALSE
+    # TODO: think about allowing binary models with probit link for homoskedastic RFX-only models?
   }
-  if (probit_outcome_model) {
+  if (link_is_probit) {
     if (!(length(unique(y_train)) == 2)) {
       stop(
-        "You specified a probit outcome model, but supplied an outcome with more than 2 unique values"
+        "You specified a probit link, but supplied an outcome with more than 2 unique values. Probit is only currently supported for binary outcomes."
       )
     }
     unique_outcomes <- sort(unique(y_train))
     if (!(all(unique_outcomes == c(0, 1)))) {
       stop(
-        "You specified a probit outcome model, but supplied an outcome with 2 unique values other than 0 and 1"
+        "You specified a probit link, but supplied an outcome with 2 unique values other than 0 and 1"
       )
     }
     if (include_variance_forest) {
@@ -837,6 +960,48 @@ bart <- function(
         "Global error variance will not be sampled with a probit link as it is fixed at 1"
       )
       sample_sigma2_global <- F
+    }
+  }
+
+  # Preliminary runtime checks for cloglog link
+  if (!include_mean_forest) {
+    link_is_cloglog <- FALSE
+    # TODO: think about allowing binary models with cloglog link for homoskedastic RFX-only models?
+  }
+  if (link_is_cloglog) {
+    if (!all(as.integer(y_train) == y_train)) {
+      stop(
+        "You specified a cloglog link, but supplied an outcome with non-integer values. Cloglog is only currently supported for integer outcomes."
+      )
+    }
+    unique_outcomes <- sort(unique(y_train))
+    if (!(min(unique_outcomes) %in% c(0, 1))) {
+      stop(
+        "You specified a cloglog link, but supplied an integer outcome that does not start with 0 or 1. Please remap / shift the outcomes so that the smallest category label is either 0 or 1."
+      )
+    }
+    if (!all(diff(unique_outcomes) == 1)) {
+      stop(
+        "You specified a cloglog link, but supplied an integer outcome that is not a sequence of consecutive integers"
+      )
+    }
+    if (include_variance_forest) {
+      stop("We do not support heteroskedasticity with a cloglog link")
+    }
+    if (has_basis) {
+      stop("We do not support leaf basis regression with a cloglog link")
+    }
+    if (sample_sigma2_global) {
+      warning(
+        "Global error variance will not be sampled with a cloglog link"
+      )
+      sample_sigma2_global <- F
+    }
+    if (sample_sigma2_leaf) {
+      warning(
+        "Leaf scale parameter will not be sampled with a cloglog link"
+      )
+      sample_sigma2_leaf <- F
     }
   }
 
@@ -852,10 +1017,11 @@ bart <- function(
 
   # Handle standardization, prior calibration, and initialization of forest
   # differently for binary and continuous outcomes
-  if (probit_outcome_model) {
+  if (link_is_probit) {
     # Compute a probit-scale offset and fix scale to 1
     y_bar_train <- qnorm(mean_cpp(as.numeric(y_train)))
     y_std_train <- 1
+    standardize <- FALSE
 
     # Set a pseudo outcome by subtracting mean_cpp(y_train) from y_train
     resid_train <- y_train - mean_cpp(as.numeric(y_train))
@@ -907,6 +1073,34 @@ bart <- function(
       }
     }
     current_sigma2 <- sigma2_init
+  } else if (link_is_cloglog) {
+    # Fix offset to 0 and scale to 1
+    y_bar_train <- 0
+    y_std_train <- 1
+    standardize <- FALSE
+
+    # Remap outcomes to start from 0
+    resid_train <- as.numeric(y_train - min(unique_outcomes))
+    cloglog_num_categories <- max(resid_train) + 1
+
+    # Set initial values of root nodes to 0.0 (in linear scale)
+    init_val_mean <- 0.0
+
+    # Calibrate priors for sigma^2 and tau
+    # Set sigma2_init to 1, ignoring default provided
+    sigma2_init <- 1.0
+    if (is.null(sigma2_leaf_init)) {
+      sigma2_leaf_init <- as.matrix(2 / (num_trees_mean))
+    }
+    current_sigma2 <- sigma2_init
+    current_leaf_scale <- sigma2_leaf_init
+
+    # Set first cutpoint to 0 for identifiability
+    cloglog_cutpoint_0 <- 0
+
+    # Set shape and rate parameters for conditional gamma model
+    cloglog_forest_shape <- 2.0
+    cloglog_forest_rate <- 2.0
   } else {
     # Only standardize if user requested
     if (standardize) {
@@ -977,8 +1171,10 @@ bart <- function(
   }
 
   # Determine leaf model type
-  if (!has_basis) {
+  if ((!has_basis) && (!link_is_cloglog)) {
     leaf_model_mean_forest <- 0
+  } else if ((!has_basis) && (link_is_cloglog)) {
+    leaf_model_mean_forest <- 4
   } else if (ncol(leaf_basis_train) == 1) {
     leaf_model_mean_forest <- 1
   } else if (ncol(leaf_basis_train) > 1) {
@@ -1013,6 +1209,10 @@ bart <- function(
       )
       sample_sigma2_leaf <- FALSE
     }
+  } else if (leaf_model_mean_forest == 4) {
+    leaf_dimension = 1
+    is_leaf_constant = TRUE
+    leaf_regression = FALSE
   }
 
   # Data
@@ -1037,6 +1237,11 @@ bart <- function(
   }
   rng <- createCppRNG(random_seed)
 
+  # Separate ordinal sampler object for cloglog
+  if (link_is_cloglog) {
+    ordinal_sampler <- ordinal_sampler_cpp()
+  }
+
   # Sampling data structures
   feature_types <- as.integer(feature_types)
   global_model_config <- createGlobalModelConfig(
@@ -1059,6 +1264,10 @@ bart <- function(
       cutpoint_grid_size = cutpoint_grid_size,
       num_features_subsample = num_features_subsample_mean
     )
+    if (link_is_cloglog) {
+      forest_model_config_mean$update_cloglog_forest_shape(cloglog_forest_shape)
+      forest_model_config_mean$update_cloglog_forest_rate(cloglog_forest_rate)
+    }
     forest_model_mean <- createForestModel(
       forest_dataset_train,
       forest_model_config_mean,
@@ -1078,6 +1287,8 @@ bart <- function(
       min_samples_leaf = min_samples_leaf_variance,
       max_depth = max_depth_variance,
       leaf_model_type = leaf_model_variance_forest,
+      variance_forest_shape = a_forest,
+      variance_forest_scale = b_forest,
       cutpoint_grid_size = cutpoint_grid_size,
       num_features_subsample = num_features_subsample_variance
     )
@@ -1194,7 +1405,7 @@ bart <- function(
     )
   }
 
-  # Container of variance parameter samples
+  # Container of parameter samples
   num_actual_mcmc_iter <- num_mcmc * keep_every
   num_samples <- num_gfr + num_burnin + num_actual_mcmc_iter
   # Delete GFR samples from these containers after the fact if desired
@@ -1207,6 +1418,13 @@ bart <- function(
   }
   if (sample_sigma2_leaf) {
     leaf_scale_samples <- rep(NA, num_retained_samples)
+  }
+  if (link_is_cloglog) {
+    cloglog_cutpoint_samples <- matrix(
+      NA_real_,
+      cloglog_num_categories - 1,
+      num_retained_samples
+    )
   }
   if (include_mean_forest) {
     mean_forest_pred_train <- matrix(
@@ -1263,6 +1481,44 @@ bart <- function(
     )
   }
 
+  # Initialize auxiliary data for cloglog
+  if (link_is_cloglog) {
+    ## Allocate auxiliary data
+    train_size <- nrow(X_train)
+    # Latent variable (Z in Alam et al (2025) notation)
+    forest_dataset_train$add_auxiliary_dimension(train_size)
+    # Forest predictions (eta in Alam et al (2025) notation)
+    forest_dataset_train$add_auxiliary_dimension(train_size)
+    # Log-scale non-cumulative cutpoint (gamma in Alam et al (2025) notation)
+    forest_dataset_train$add_auxiliary_dimension(cloglog_num_categories - 1)
+    # Exponentiated cumulative cutpoints (exp(c_k) in Alam et al (2025) notation)
+    # This auxiliary series is designed so that the element stored at position `i`
+    # corresponds to the sum of all exponentiated gamma_j values for j < i.
+    # It has cloglog_num_categories elements instead of cloglog_num_categories - 1 because
+    # even the largest categorical index has a valid value of sum_{j < i} exp(gamma_j)
+    forest_dataset_train$add_auxiliary_dimension(cloglog_num_categories)
+
+    ## Set initial values for auxiliary data
+    # Initialize latent variables to zero (slot 0)
+    for (i in 1:train_size) {
+      forest_dataset_train$set_auxiliary_data_value(0, i - 1, 0.0)
+    }
+    # Initialize forest predictions to zero (slot 1)
+    for (i in 1:train_size) {
+      forest_dataset_train$set_auxiliary_data_value(1, i - 1, 0.0)
+    }
+    # Initialize log-scale cutpoints to 0
+    initial_gamma <- rep(0.0, cloglog_num_categories - 1)
+    for (i in seq_along(initial_gamma)) {
+      forest_dataset_train$set_auxiliary_data_value(2, i - 1, initial_gamma[i])
+    }
+    # Convert to cumulative exponentiated cutpoints directly in C++
+    ordinal_sampler_update_cumsum_exp_cpp(
+      ordinal_sampler,
+      forest_dataset_train$data_ptr
+    )
+  }
+
   # Run GFR (warm start) if specified
   if (num_gfr > 0) {
     for (i in 1:num_gfr) {
@@ -1286,7 +1542,7 @@ bart <- function(
       }
 
       if (include_mean_forest) {
-        if (probit_outcome_model) {
+        if (link_is_probit) {
           # Sample latent probit variable, z | -
           outcome_pred <- active_forest_mean$predict(
             forest_dataset_train
@@ -1328,6 +1584,52 @@ bart <- function(
           mean_forest_pred_train[,
             sample_counter
           ] <- forest_model_mean$get_cached_forest_predictions()
+        }
+
+        # Additional Gibbs updates needed for the cloglog model
+        if (link_is_cloglog) {
+          # Update auxiliary data to current forest predictions
+          forest_pred_current <- forest_model_mean$get_cached_forest_predictions()
+          for (i in 1:train_size) {
+            forest_dataset_train$set_auxiliary_data_value(
+              1,
+              i - 1,
+              forest_pred_current[i]
+            )
+          }
+
+          # Sample latent z_i's using truncated exponential
+          ordinal_sampler_update_latent_variables_cpp(
+            ordinal_sampler,
+            forest_dataset_train$data_ptr,
+            outcome_train$data_ptr,
+            rng$rng_ptr
+          )
+
+          # Sample gamma parameters (cutpoints)
+          ordinal_sampler_update_gamma_params_cpp(
+            ordinal_sampler,
+            forest_dataset_train$data_ptr,
+            outcome_train$data_ptr,
+            cloglog_forest_shape,
+            cloglog_forest_rate,
+            cloglog_cutpoint_0,
+            rng$rng_ptr
+          )
+
+          # Update cumulative sum of exp(gamma) values
+          ordinal_sampler_update_cumsum_exp_cpp(
+            ordinal_sampler,
+            forest_dataset_train$data_ptr
+          )
+
+          # Retain cutpoint draw
+          if (keep_sample) {
+            cloglog_cutpoints <- forest_dataset_train$get_auxiliary_data_vector(
+              2
+            )
+            cloglog_cutpoint_samples[, sample_counter] <- cloglog_cutpoints
+          }
         }
       }
       if (include_variance_forest) {
@@ -1395,6 +1697,9 @@ bart <- function(
   # Run MCMC
   if (num_burnin + num_mcmc > 0) {
     for (chain_num in 1:num_chains) {
+      if (verbose) {
+        cat("Sampling chain", chain_num, "of", num_chains, "\n")
+      }
       if (num_gfr > 0) {
         # Reset state of active_forest and forest_model based on a previous GFR sample
         forest_ind <- num_gfr - chain_num
@@ -1417,6 +1722,37 @@ bart <- function(
             forest_model_config_mean$update_leaf_model_scale(
               current_leaf_scale
             )
+          }
+          if (link_is_cloglog) {
+            # Restore ordinal labels corrupted by resetForestModel's
+            # residual adjustment (outcome stores category labels, not residuals)
+            outcome_train$update_data(resid_train)
+            # We can reset cutpoints from warm-start since cutpoints are retained
+            current_cutpoints <- cloglog_cutpoint_samples[, forest_ind + 1]
+            for (i in seq_along(current_cutpoints)) {
+              forest_dataset_train$set_auxiliary_data_value(
+                2,
+                i - 1,
+                current_cutpoints[i]
+              )
+            }
+            ordinal_sampler_update_cumsum_exp_cpp(
+              ordinal_sampler,
+              forest_dataset_train$data_ptr
+            )
+            # Re-predict from the reconstituted active forest
+            active_forest_preds <- active_forest_mean$predict(
+              forest_dataset_train
+            )
+            for (i in 1:train_size) {
+              forest_dataset_train$set_auxiliary_data_value(
+                1,
+                i - 1,
+                active_forest_preds[i]
+              )
+              # Latent variables must be reset to 0 and burnt in
+              forest_dataset_train$set_auxiliary_data_value(0, i - 1, 0.0)
+            }
           }
         }
         if (include_variance_forest) {
@@ -1484,6 +1820,39 @@ bart <- function(
             forest_model_config_mean$update_leaf_model_scale(
               current_leaf_scale
             )
+          }
+          if (link_is_cloglog) {
+            # Restore ordinal labels corrupted by resetForestModel's
+            # residual adjustment (outcome stores category labels, not residuals)
+            outcome_train$update_data(resid_train)
+            # We can reset cutpoints from warm-start since cutpoints are retained
+            current_cutpoints <- previous_cloglog_cutpoint_samples[,
+              warmstart_index
+            ]
+            for (i in seq_along(current_cutpoints)) {
+              forest_dataset_train$set_auxiliary_data_value(
+                2,
+                i - 1,
+                current_cutpoints[i]
+              )
+            }
+            ordinal_sampler_update_cumsum_exp_cpp(
+              ordinal_sampler,
+              forest_dataset_train$data_ptr
+            )
+            # Re-predict from the reconstituted active forest
+            active_forest_preds <- active_forest_mean$predict(
+              forest_dataset_train
+            )
+            for (i in 1:train_size) {
+              forest_dataset_train$set_auxiliary_data_value(
+                1,
+                i - 1,
+                active_forest_preds[i]
+              )
+              # Latent variables must be reset to 0 and burnt in
+              forest_dataset_train$set_auxiliary_data_value(0, i - 1, 0.0)
+            }
           }
         }
         if (include_variance_forest) {
@@ -1565,6 +1934,30 @@ bart <- function(
               current_leaf_scale
             )
           }
+          if (link_is_cloglog) {
+            # Restore ordinal labels corrupted by resetForestModel's
+            # residual adjustment (outcome stores category labels, not residuals)
+            outcome_train$update_data(resid_train)
+            # Reset all cloglog parameters to default values
+            for (i in 1:train_size) {
+              forest_dataset_train$set_auxiliary_data_value(0, i - 1, 0.0)
+              forest_dataset_train$set_auxiliary_data_value(1, i - 1, 0.0)
+            }
+            # Initialize log-scale cutpoints to 0
+            initial_gamma <- rep(0.0, cloglog_num_categories - 1)
+            for (i in seq_along(initial_gamma)) {
+              forest_dataset_train$set_auxiliary_data_value(
+                2,
+                i - 1,
+                initial_gamma[i]
+              )
+            }
+            # Convert to cumulative exponentiated cutpoints directly in C++
+            ordinal_sampler_update_cumsum_exp_cpp(
+              ordinal_sampler,
+              forest_dataset_train$data_ptr
+            )
+          }
         }
         if (include_variance_forest) {
           resetActiveForest(active_forest_variance)
@@ -1624,7 +2017,7 @@ bart <- function(
         }
         # Print progress
         if (verbose) {
-          if (num_burnin > 0) {
+          if (num_burnin > 0 && !is_mcmc) {
             if (
               ((i - num_gfr) %% 100 == 0) ||
                 ((i - num_gfr) == num_burnin)
@@ -1640,26 +2033,42 @@ bart <- function(
               )
             }
           }
-          if (num_mcmc > 0) {
-            if (
-              ((i - num_gfr - num_burnin) %% 100 == 0) ||
-                (i == num_samples)
-            ) {
-              cat(
-                "Sampling",
-                i - num_burnin - num_gfr,
-                "out of",
-                num_mcmc,
-                "BART MCMC draws; Chain number ",
-                chain_num,
-                "\n"
-              )
+          if (num_mcmc > 0 && is_mcmc) {
+            raw_iter <- i - num_gfr - num_burnin
+            if ((raw_iter %% 100 == 0) || (i == num_samples)) {
+              if (keep_every == 1) {
+                cat(
+                  "Sampling",
+                  raw_iter,
+                  "out of",
+                  num_mcmc,
+                  "BART MCMC draws; Chain number ",
+                  chain_num,
+                  "\n"
+                )
+              } else {
+                cat(
+                  "Sampling raw draw",
+                  raw_iter,
+                  "of",
+                  num_actual_mcmc_iter,
+                  "BART MCMC draws (thinning by",
+                  keep_every,
+                  ":",
+                  raw_iter %/% keep_every,
+                  "of",
+                  num_mcmc,
+                  "retained); Chain number ",
+                  chain_num,
+                  "\n"
+                )
+              }
             }
           }
         }
 
         if (include_mean_forest) {
-          if (probit_outcome_model) {
+          if (link_is_probit) {
             # Sample latent probit variable, z | -
             outcome_pred <- active_forest_mean$predict(
               forest_dataset_train
@@ -1699,6 +2108,52 @@ bart <- function(
             mean_forest_pred_train[,
               sample_counter
             ] <- forest_model_mean$get_cached_forest_predictions()
+          }
+
+          # Additional Gibbs updates needed for the cloglog model
+          if (link_is_cloglog) {
+            # Update auxiliary data to current forest predictions
+            forest_pred_current <- forest_model_mean$get_cached_forest_predictions()
+            for (i in 1:train_size) {
+              forest_dataset_train$set_auxiliary_data_value(
+                1,
+                i - 1,
+                forest_pred_current[i]
+              )
+            }
+
+            # Sample latent z_i's using truncated exponential
+            ordinal_sampler_update_latent_variables_cpp(
+              ordinal_sampler,
+              forest_dataset_train$data_ptr,
+              outcome_train$data_ptr,
+              rng$rng_ptr
+            )
+
+            # Sample gamma parameters (cutpoints)
+            ordinal_sampler_update_gamma_params_cpp(
+              ordinal_sampler,
+              forest_dataset_train$data_ptr,
+              outcome_train$data_ptr,
+              cloglog_forest_shape,
+              cloglog_forest_rate,
+              cloglog_cutpoint_0,
+              rng$rng_ptr
+            )
+
+            # Update cumulative sum of exp(gamma) values
+            ordinal_sampler_update_cumsum_exp_cpp(
+              ordinal_sampler,
+              forest_dataset_train$data_ptr
+            )
+
+            # Retain cutpoint draw
+            if (keep_sample) {
+              cloglog_cutpoints <- forest_dataset_train$get_auxiliary_data_vector(
+                2
+              )
+              cloglog_cutpoint_samples[, sample_counter] <- cloglog_cutpoints
+            }
           }
         }
         if (include_variance_forest) {
@@ -1783,6 +2238,12 @@ bart <- function(
       mean_forest_pred_train <- mean_forest_pred_train[,
         (num_gfr + 1):ncol(mean_forest_pred_train)
       ]
+      if (link_is_cloglog) {
+        cloglog_cutpoint_samples <- cloglog_cutpoint_samples[,
+          (num_gfr + 1):ncol(cloglog_cutpoint_samples),
+          drop = FALSE
+        ]
+      }
     }
     if (include_variance_forest) {
       variance_forest_pred_train <- variance_forest_pred_train[,
@@ -1917,7 +2378,13 @@ bart <- function(
     "sample_sigma2_leaf" = sample_sigma2_leaf,
     "include_mean_forest" = include_mean_forest,
     "include_variance_forest" = include_variance_forest,
+    "outcome_model" = outcome_model,
     "probit_outcome_model" = probit_outcome_model,
+    "cloglog_num_categories" = ifelse(
+      link_is_cloglog,
+      cloglog_num_categories,
+      0
+    ),
     "rfx_model_spec" = rfx_model_spec
   )
   result <- list(
@@ -1927,7 +2394,12 @@ bart <- function(
   if (include_mean_forest) {
     result[["mean_forests"]] = forest_samples_mean
     result[["y_hat_train"]] = y_hat_train
-    if (has_test) result[["y_hat_test"]] = y_hat_test
+    if (has_test) {
+      result[["y_hat_test"]] = y_hat_test
+    }
+    if (link_is_cloglog && !outcome_is_binary) {
+      result[["cloglog_cutpoint_samples"]] = cloglog_cutpoint_samples
+    }
   }
   if (include_variance_forest) {
     result[["variance_forests"]] = forest_samples_variance
@@ -1979,7 +2451,7 @@ bart <- function(
   return(result)
 }
 
-#' @title Predict From a BART Model
+#' @title Predict from a BART model
 #' @description
 #' Predict from a sampled BART model on new data
 #'
@@ -1992,7 +2464,7 @@ bart <- function(
 #' @param rfx_basis (Optional) Test set basis for "random-slope" regression in additive random effects model.
 #' @param type (Optional) Type of prediction to return. Options are "mean", which averages the predictions from every draw of a BART model, and "posterior", which returns the entire matrix of posterior predictions. Default: "posterior".
 #' @param terms (Optional) Which model terms to include in the prediction. This can be a single term or a list of model terms. Options include "y_hat", "mean_forest", "rfx", "variance_forest", or "all". If a model doesn't have mean forest, random effects, or variance forest predictions, but one of those terms is request, the request will simply be ignored. If none of the requested terms are present in a model, this function will return `NULL` along with a warning. Default: "all".
-#' @param scale (Optional) Scale of mean function predictions. Options are "linear", which returns predictions on the original scale of the mean forest / RFX terms, and "probability", which transforms predictions into a probability of observing `y == 1`. "probability" is only valid for models fit with a probit outcome model. Default: "linear".
+#' @param scale (Optional) Scale of mean function predictions. Options are "linear", which returns predictions on the original scale of the mean forest / RFX terms, "probability", which transforms predictions into class probabilities for models with discrete outcomes, and "class", which returns predicted outcome categories for discrete outcome models. "probability" is only valid for outcome models with `outcome == 'binary'` or `outcome == 'ordinal'`. For binary outcomes, this will return the probability that `y == 1`, and for ordinal outcomes, this will return probabilities for each outcome label. Default: "linear".
 #' @param ... (Optional) Other prediction parameters.
 #'
 #' @return List of prediction matrices or single prediction matrix / vector, depending on the terms requested.
@@ -2037,16 +2509,29 @@ predict.bartmodel <- function(
   if (!is.character(scale)) {
     stop("scale must be a string or character vector")
   }
-  if (!(scale %in% c("linear", "probability"))) {
-    stop("scale must either be 'linear' or 'probability'")
+  if (!(scale %in% c("linear", "probability", "class"))) {
+    stop("scale must either be 'linear', 'probability', or 'class'")
   }
-  is_probit <- object$model_params$probit_outcome_model
-  if ((scale == "probability") && (!is_probit)) {
+  outcome_model <- object$model_params$outcome_model
+  is_probit <- (outcome_model$link == "probit" &&
+    outcome_model$outcome == "binary")
+  is_binary_cloglog <- (outcome_model$link == "cloglog" &&
+    outcome_model$outcome == "binary")
+  is_ordinal_cloglog <- (outcome_model$link == "cloglog" &&
+    outcome_model$outcome == "ordinal")
+  is_cloglog <- is_binary_cloglog || is_ordinal_cloglog
+  if ((scale == "probability") && (!(is_probit || is_cloglog))) {
     stop(
-      "scale cannot be 'probability' for models not fit with a probit outcome model"
+      "scale cannot be 'probability' for models not fit with a probit or cloglog outcome model"
+    )
+  }
+  if ((scale == "class") && (!(is_probit || is_cloglog))) {
+    stop(
+      "scale cannot be 'class' for models not fit with a probit or cloglog outcome model"
     )
   }
   probability_scale <- scale == "probability"
+  class_scale <- scale == "class"
 
   # Handle prediction type
   if (!is.character(type)) {
@@ -2056,6 +2541,9 @@ predict.bartmodel <- function(
     stop("type must either be 'mean' or 'posterior'")
   }
   predict_mean <- type == "mean"
+  if (predict_mean && class_scale) {
+    stop("Posterior mean predictions are not supported for scale = 'class'")
+  }
 
   # Handle prediction terms
   rfx_model_spec <- object$model_params$rfx_model_spec
@@ -2093,6 +2581,11 @@ predict.bartmodel <- function(
   }
   predict_rfx_intermediate <- (predict_y_hat && has_rfx)
   predict_mean_forest_intermediate <- (predict_y_hat && has_mean_forest)
+  if (class_scale) {
+    if (!((predict_count == 1) && (predict_y_hat))) {
+      stop("Class scale can only be used with y_hat predictions")
+    }
+  }
 
   # Check that we have at least one term to predict on probability scale
   if (
@@ -2270,16 +2763,81 @@ predict.bartmodel <- function(
 
   # Combine into y hat predictions
   if (probability_scale) {
-    if (predict_y_hat && has_mean_forest && has_rfx) {
-      y_hat <- pnorm(mean_forest_predictions + rfx_predictions)
-      mean_forest_predictions <- pnorm(mean_forest_predictions)
-      rfx_predictions <- pnorm(rfx_predictions)
-    } else if (predict_y_hat && has_mean_forest) {
-      y_hat <- pnorm(mean_forest_predictions)
-      mean_forest_predictions <- pnorm(mean_forest_predictions)
-    } else if (predict_y_hat && has_rfx) {
-      y_hat <- pnorm(rfx_predictions)
-      rfx_predictions <- pnorm(rfx_predictions)
+    if (is_probit) {
+      if (predict_y_hat) {
+        if (has_mean_forest && has_rfx) {
+          y_hat <- pnorm(mean_forest_predictions + rfx_predictions)
+          mean_forest_predictions <- pnorm(mean_forest_predictions)
+          rfx_predictions <- pnorm(rfx_predictions)
+        } else if (has_mean_forest) {
+          y_hat <- pnorm(mean_forest_predictions)
+          mean_forest_predictions <- pnorm(mean_forest_predictions)
+        } else if (has_rfx) {
+          y_hat <- pnorm(rfx_predictions)
+          rfx_predictions <- pnorm(rfx_predictions)
+        }
+      } else {
+        if (has_mean_forest && has_rfx) {
+          mean_forest_predictions <- pnorm(mean_forest_predictions)
+          rfx_predictions <- pnorm(rfx_predictions)
+        } else if (has_mean_forest) {
+          mean_forest_predictions <- pnorm(mean_forest_predictions)
+        } else if (has_rfx) {
+          rfx_predictions <- pnorm(rfx_predictions)
+        }
+      }
+    } else if (is_binary_cloglog) {
+      mean_forest_predictions <- exp(-exp(mean_forest_predictions))
+      if (predict_y_hat) {
+        y_hat <- mean_forest_predictions
+      }
+    } else if (is_ordinal_cloglog) {
+      cloglog_num_categories <- object$model_params$cloglog_num_categories
+      cloglog_cutpoint_samples <- object$cloglog_cutpoint_samples
+      mean_forest_probabilities <- array(
+        NA_real_,
+        dim = c(
+          nrow(X),
+          cloglog_num_categories,
+          object$model_params$num_samples
+        )
+      )
+      for (j in 1:cloglog_num_categories) {
+        if (j == 1) {
+          mean_forest_probabilities[, j, ] <- (1 -
+            exp(
+              -exp(
+                mean_forest_predictions +
+                  cloglog_cutpoint_samples[j, ]
+              )
+            ))
+        } else if (j == cloglog_num_categories) {
+          mean_forest_probabilities[, j, ] <- 1 -
+            apply(
+              mean_forest_probabilities[, 1:(j - 1), , drop = FALSE],
+              c(1, 3),
+              sum
+            )
+        } else {
+          mean_forest_probabilities[, j, ] <- (exp(
+            -exp(
+              mean_forest_predictions +
+                cloglog_cutpoint_samples[j - 1, ]
+            )
+          ) *
+            (1 -
+              exp(
+                -exp(
+                  mean_forest_predictions +
+                    cloglog_cutpoint_samples[j, ]
+                )
+              )))
+        }
+      }
+      if (predict_y_hat) {
+        y_hat <- mean_forest_probabilities
+      }
+      mean_forest_predictions <- mean_forest_probabilities
     }
   } else {
     if (predict_y_hat && has_mean_forest && has_rfx) {
@@ -2294,13 +2852,31 @@ predict.bartmodel <- function(
   # Collapse to posterior mean predictions if requested
   if (predict_mean) {
     if (predict_mean_forest) {
-      mean_forest_predictions <- rowMeans(mean_forest_predictions)
+      if (is_ordinal_cloglog && probability_scale) {
+        mean_forest_predictions <- apply(mean_forest_predictions, c(1, 2), mean)
+      } else {
+        mean_forest_predictions <- rowMeans(mean_forest_predictions)
+      }
     }
     if (predict_rfx) {
+      # Note: random effects not supported for cloglog, so we don't have to handle the ordinal / cloglog case here
       rfx_predictions <- rowMeans(rfx_predictions)
     }
     if (predict_y_hat) {
-      y_hat <- rowMeans(y_hat)
+      if (is_ordinal_cloglog && probability_scale) {
+        y_hat <- apply(y_hat, c(1, 2), mean)
+      } else {
+        y_hat <- rowMeans(y_hat)
+      }
+    }
+  }
+
+  # Convert probabilities to classes if requested
+  if (class_scale) {
+    if (is_ordinal_cloglog) {
+      y_hat <- apply(y_hat, c(1, 3), which.max)
+    } else {
+      y_hat <- ifelse(y_hat < 0.5, 0, 1)
     }
   }
 
@@ -2340,7 +2916,7 @@ predict.bartmodel <- function(
   }
 }
 
-#' @title Summarize a BART Model
+#' @title Print summary of BART model
 #' @description Prints a summary of the BART model, including the model terms and their specifications.
 #' @param x The BART model object
 #' @param ... Additional arguments
@@ -2383,16 +2959,38 @@ print.bartmodel <- function(x, ...) {
   }
 
   # Outcome and leaf model details
+  outcome_model <- x$model_params$outcome_model
+  is_probit <- (outcome_model$link == "probit" &&
+    outcome_model$outcome == "binary")
+  is_binary_cloglog <- (outcome_model$link == "cloglog" &&
+    outcome_model$outcome == "binary")
+  is_ordinal_cloglog <- (outcome_model$link == "cloglog" &&
+    outcome_model$outcome == "ordinal")
+  if (is_ordinal_cloglog) {
+    num_categories <- x$model_params$cloglog_num_categories
+    outcome_model_summary <- paste0(
+      "Ordinal outcome with ",
+      num_categories,
+      " categories was modeled with a complementary log-log (cloglog) link function"
+    )
+  } else if (is_binary_cloglog) {
+    outcome_model_summary <- paste0(
+      "Binary outcome was modeled with a complementary log-log (cloglog) link function"
+    )
+  } else if (is_probit) {
+    outcome_model_summary <- paste0(
+      "Binary outcome was modeled with a probit link function"
+    )
+  } else {
+    outcome_model_summary <- paste0(
+      "Continuous outcome was modeled as Gaussian"
+    )
+  }
   if (x$model_params$leaf_regression) {
     summary_message <- paste0(
       summary_message,
       "\n",
-      "Outcome was modeled ",
-      ifelse(
-        x$model_params$probit_outcome_model,
-        "with a probit link",
-        "as gaussian"
-      ),
+      outcome_model_summary,
       " with a leaf regression prior with ",
       x$model_params$leaf_dimension,
       " bases for the mean forest"
@@ -2401,24 +2999,14 @@ print.bartmodel <- function(x, ...) {
     summary_message <- paste0(
       summary_message,
       "\n",
-      "Outcome was modeled ",
-      ifelse(
-        x$model_params$probit_outcome_model,
-        "with a probit link",
-        "as gaussian"
-      ),
+      outcome_model_summary,
       " with a constant leaf prior for the mean forest"
     )
   } else {
     summary_message <- paste0(
       summary_message,
       "\n",
-      "Outcome was modeled ",
-      ifelse(
-        x$model_params$probit_outcome_model,
-        "with a probit link",
-        "as gaussian"
-      ),
+      outcome_model_summary,
     )
   }
 
@@ -2483,7 +3071,7 @@ print.bartmodel <- function(x, ...) {
   invisible(x)
 }
 
-#' @title Summarize the BART model fit and sampled terms.
+#' @title Summarize BART model fit and parameters
 #' @description Summarize the BART with a description of the model that was fit and numeric summaries of any sampled quantities.
 #' @param object The BART model object
 #' @param ... Additional arguments
@@ -2533,6 +3121,18 @@ summary.bartmodel <- function(object, ...) {
     print(quantiles_sigma2)
   }
 
+  # Determine whether outcome model is binary / ordinal
+  outcome_model <- object$model_params$outcome_model
+  is_probit <- (outcome_model$link == "probit" &&
+    outcome_model$outcome == "binary")
+  is_binary_cloglog <- (outcome_model$link == "cloglog" &&
+    outcome_model$outcome == "binary")
+  is_ordinal_cloglog <- (outcome_model$link == "cloglog" &&
+    outcome_model$outcome == "ordinal")
+  non_continuous_outcome <- (is_probit ||
+    is_binary_cloglog ||
+    is_ordinal_cloglog)
+
   # In-sample predictions
   if (!is.null(object$y_hat_train)) {
     y_hat_train_mean <- rowMeans(object$y_hat_train)
@@ -2543,8 +3143,13 @@ summary.bartmodel <- function(object, ...) {
       y_hat_train_mean,
       probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
     )
+    if (non_continuous_outcome) {
+      summary_text <- "Summary of in-sample inverse-link-scale posterior predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n"
+    } else {
+      summary_text <- "Summary of in-sample posterior mean predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n"
+    }
     cat(sprintf(
-      "Summary of in-sample posterior mean predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      summary_text,
       n_y_hat_train,
       mean_y_hat_train,
       sd_y_hat_train
@@ -2562,8 +3167,13 @@ summary.bartmodel <- function(object, ...) {
       y_hat_test_mean,
       probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
     )
+    if (non_continuous_outcome) {
+      summary_text <- "Summary of test-set inverse-link-scale posterior predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n"
+    } else {
+      summary_text <- "Summary of test-set posterior mean predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n"
+    }
     cat(sprintf(
-      "Summary of test-set posterior mean predictions: \n%d observations, mean = %.3f, standard deviation = %.3f, quantiles:\n",
+      summary_text,
       n_y_hat_test,
       mean_y_hat_test,
       sd_y_hat_test
@@ -2572,17 +3182,52 @@ summary.bartmodel <- function(object, ...) {
   }
 
   # Random effects
-  # TODO: add random effects summaries once indexing is fixed
   if (object$model_params$has_rfx) {
-    # rfx_summary <- getRandomEffectSamples(object)
-    # ...
+    rfx_samples <- getRandomEffectSamples(object)
+    rfx_beta_samples <- rfx_samples$beta_samples
+    if (length(dim(rfx_beta_samples)) > 2) {
+      cat(
+        "Random effects summary of variance components across groups and posterior draws:\n"
+      )
+      rfx_component_means <- apply(rfx_beta_samples, 1, mean)
+      rfx_component_sds <- apply(rfx_beta_samples, 1, sd)
+      cat("Variance component means: ", rfx_component_means, "\n")
+      cat("Variance component standard deviations: ", rfx_component_sds, "\n")
+      quantile_summary <- t(apply(
+        rfx_beta_samples,
+        1,
+        quantile,
+        probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+      ))
+      cat("Variance component quantiles:\n")
+      print(quantile_summary)
+    } else {
+      cat(
+        "Random effects summary of variance components across groups and posterior draws:\n"
+      )
+      rfx_component_means <- mean(rfx_beta_samples)
+      rfx_component_sds <- sd(rfx_beta_samples)
+      cat("Random effects overall mean: ", rfx_component_means, "\n")
+      cat(
+        "Random effects overall standard deviation: ",
+        rfx_component_sds,
+        "\n"
+      )
+      cat("Random effects overall quantiles:\n")
+      quantile_summary <- quantile(
+        rfx_beta_samples,
+        probs = c(0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975)
+      )
+      cat("Random effects overall quantiles:\n")
+      print(quantile_summary)
+    }
   }
 
   # Return bart_model invisibly
   invisible(object)
 }
 
-#' @title Plot BART Model Fit.
+#' @title Plot BART model fit
 #' @description Plot the BART model fit and any relevant sampled quantities. This will default to a traceplot of the global error scale and the in-sample mean forest predictions for the first train set observation. Since `stochtree::bart()` is flexible and it's possible to sample a model with a fixed global error scale and no mean forest, this procedure is adaptive and will attempt to plot a trace of whichever model terms are included if these two default terms are omitted.
 #' @param x The BART model object
 #' @param ... Additional arguments
@@ -2592,6 +3237,17 @@ plot.bartmodel <- function(x, ...) {
   # Check if model has global error scale samples
   has_sigma2_samples <- x$model_params$sample_sigma2_global
   has_mean_forest_preds <- !is.null(x$y_hat_train)
+
+  # Check if model is ordinal / binary
+  is_probit <- (x$model_params$outcome_model$link == "probit" &&
+    x$model_params$outcome_model$outcome == "binary")
+  is_binary_cloglog <- (x$model_params$outcome_model$link == "cloglog" &&
+    x$model_params$outcome_model$outcome == "binary")
+  is_ordinal_cloglog <- (x$model_params$outcome_model$link == "cloglog" &&
+    x$model_params$outcome_model$outcome == "ordinal")
+  non_continuous_outcome <- (is_probit ||
+    is_binary_cloglog ||
+    is_ordinal_cloglog)
 
   # First try combinations of sigma2 and mean forest predictions
   if (has_sigma2_samples || has_mean_forest_preds) {
@@ -2603,11 +3259,16 @@ plot.bartmodel <- function(x, ...) {
         main = "Global error scale traceplot"
       )
     } else if (has_mean_forest_preds) {
+      if (non_continuous_outcome) {
+        plot_text <- "In-sample inverse-link-scale prediction trace for the first train set observation"
+      } else {
+        plot_text <- "In-sample mean function trace for the first train set observation"
+      }
       plot(
         x$y_hat_train[1, ],
         type = "l",
         ylab = "Predictions",
-        main = "In-sample mean function trace for the first train set observation"
+        main = plot_text
       )
     }
   } else {
@@ -2620,7 +3281,7 @@ plot.bartmodel <- function(x, ...) {
   invisible(x)
 }
 
-#' @title Extract Random Effects Samples
+#' @title Extract random effects samples from BART model
 #' @description
 #' Extract raw sample values for each of the random effect parameter terms.
 #'
@@ -2693,7 +3354,7 @@ getRandomEffectSamples.bartmodel <- function(object, ...) {
   return(result)
 }
 
-#' @title Extract BART Parameter Samples.
+#' @title Extract BART parameter samples
 #' @description Extract a vector, matrix or array of parameter samples from a BART model by name.
 #' Random effects are handled by a separate `getRandomEffectSamples` function due to the complexity of the random effects parameters.
 #' If the requested model term is not found, an error is thrown.
@@ -2704,6 +3365,7 @@ getRandomEffectSamples.bartmodel <- function(object, ...) {
 #' - Test set mean function predictions: `"y_hat_test"`
 #' - In-sample variance forest predictions: `"sigma2_x_train"`, `"var_x_train"`
 #' - Test set variance forest predictions: `"sigma2_x_test"`, `"var_x_test"`
+#' - Ordinal model cutpoints (valid only for ordinal cloglog models): `"cloglog_cutpoints"`, `"cutpoints"`
 #'
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
 #' @param term Name of the parameter to extract (e.g., `"sigma2"`, `"y_hat_train"`, etc.)
@@ -2750,8 +3412,8 @@ getRandomEffectSamples.bartmodel <- function(object, ...) {
 #'                    rfx_basis_train = rfx_basis_train,
 #'                    rfx_basis_test = rfx_basis_test,
 #'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' sigma2_samples <- extract_parameter(bart_model, "sigma2")
-extract_parameter.bartmodel <- function(object, term) {
+#' sigma2_samples <- extractParameter(bart_model, "sigma2")
+extractParameter.bartmodel <- function(object, term) {
   if (term %in% c("sigma2", "global_error_scale", "sigma2_global")) {
     if (!is.null(object$sigma2_global_samples)) {
       return(object$sigma2_global_samples)
@@ -2787,57 +3449,36 @@ extract_parameter.bartmodel <- function(object, term) {
   }
 
   if (term %in% c("sigma2_x_train", "var_x_train")) {
-    if (!is.null(object$sigma2_x_train)) {
-      return(object$sigma2_x_train)
+    if (!is.null(object$sigma2_x_hat_train)) {
+      return(object$sigma2_x_hat_train)
     } else {
       stop("This model does not have in-sample variance forest predictions")
     }
   }
 
   if (term %in% c("sigma2_x_test", "var_x_test")) {
-    if (!is.null(object$sigma2_x_test)) {
-      return(object$sigma2_x_test)
+    if (!is.null(object$sigma2_x_hat_test)) {
+      return(object$sigma2_x_hat_test)
     } else {
       stop("This model does not have test set variance forest predictions")
+    }
+  }
+
+  if (term %in% c("cloglog_cutpoints", "cutpoints")) {
+    if (!is.null(object$cloglog_cutpoint_samples)) {
+      return(object$cloglog_cutpoint_samples)
+    } else {
+      stop("This model does not have ordinal cutpoint samples")
     }
   }
 
   stop(paste0("term ", term, " is not a valid BART model term"))
 }
 
-#' @title Convert BART Model to JSON
-#' @description
-#' Convert the persistent aspects of a BART model to (in-memory) JSON
-#'
+#' @title Convert BART model to JSON
+#' @rdname BARTSerialization
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
-#'
-#' @return Object of type `CppJson`
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' bart_json <- saveBARTModelToJson(bart_model)
 saveBARTModelToJson <- function(object) {
   jsonobj <- createCppJson()
 
@@ -2930,6 +3571,16 @@ saveBARTModelToJson <- function(object) {
   jsonobj$add_scalar("num_chains", object$model_params$num_chains)
   jsonobj$add_scalar("keep_every", object$model_params$keep_every)
   jsonobj$add_boolean("requires_basis", object$model_params$requires_basis)
+  jsonobj$add_string(
+    "outcome",
+    object$model_params$outcome_model$outcome,
+    "outcome_model"
+  )
+  jsonobj$add_string(
+    "link",
+    object$model_params$outcome_model$link,
+    "outcome_model"
+  )
   jsonobj$add_boolean(
     "probit_outcome_model",
     object$model_params$probit_outcome_model
@@ -2938,6 +3589,21 @@ saveBARTModelToJson <- function(object) {
     "rfx_model_spec",
     object$model_params$rfx_model_spec
   )
+  if (object$model_params$outcome_model$link == "cloglog") {
+    jsonobj$add_scalar(
+      "cloglog_num_categories",
+      object$model_params$cloglog_num_categories
+    )
+    if (object$model_params$outcome_model$outcome == "ordinal") {
+      for (i in 1:(object$model_params$cloglog_num_categories - 1)) {
+        jsonobj$add_vector(
+          paste0("cloglog_cutpoint_samples_", i),
+          object$cloglog_cutpoint_samples[i, ],
+          "parameters"
+        )
+      }
+    }
+  }
   if (object$model_params$sample_sigma2_global) {
     jsonobj$add_vector(
       "sigma2_global_samples",
@@ -2971,42 +3637,12 @@ saveBARTModelToJson <- function(object) {
   return(jsonobj)
 }
 
-#' @title Save BART Model to JSON File
-#' @description
-#' Convert the persistent aspects of a BART model to (in-memory) JSON and save to a file
-#'
+#' @title Save BART model to JSON file
+#' @rdname BARTSerialization
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
 #' @param filename String of filepath, must end in ".json"
 #'
-#' @return None
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' tmpjson <- tempfile(fileext = ".json")
-#' saveBARTModelToJsonFile(bart_model, file.path(tmpjson))
-#' unlink(tmpjson)
 saveBARTModelToJsonFile <- function(object, filename) {
   # Convert to Json
   jsonobj <- saveBARTModelToJson(object)
@@ -3015,38 +3651,10 @@ saveBARTModelToJsonFile <- function(object, filename) {
   jsonobj$save_file(filename)
 }
 
-#' @title Convert BART Model to JSON String
-#' @description
-#' Convert the persistent aspects of a BART model to (in-memory) JSON string
-#'
+#' @title Convert BART model to JSON string
+#' @rdname BARTSerialization
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
-#' @return in-memory JSON string
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' bart_json_string <- saveBARTModelToJsonString(bart_model)
 saveBARTModelToJsonString <- function(object) {
   # Convert to Json
   jsonobj <- saveBARTModelToJson(object)
@@ -3055,41 +3663,10 @@ saveBARTModelToJsonString <- function(object) {
   return(jsonobj$return_json_string())
 }
 
-#' @title Convert JSON to BART Model
-#' @description
-#' Convert an (in-memory) JSON representation of a BART model to a BART model object
-#' which can be used for prediction, etc...
-#'
+#' @title Convert JSON to BART model
+#' @rdname BARTSerialization
 #' @param json_object Object of type `CppJson` containing Json representation of a BART model
-#'
-#' @return Object of type `bartmodel`
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' bart_json <- saveBARTModelToJson(bart_model)
-#' bart_model_roundtrip <- createBARTModelFromJson(bart_json)
 createBARTModelFromJson <- function(json_object) {
   # Initialize the BCF model
   output <- list()
@@ -3188,9 +3765,21 @@ createBARTModelFromJson <- function(json_object) {
   model_params[["probit_outcome_model"]] <- json_object$get_boolean(
     "probit_outcome_model"
   )
+  outcome_model_outcome <- json_object$get_string("outcome", "outcome_model")
+  outcome_model_link <- json_object$get_string("link", "outcome_model")
+  model_params[["outcome_model"]] <- OutcomeModel(
+    outcome = outcome_model_outcome,
+    link = outcome_model_link
+  )
   model_params[["rfx_model_spec"]] <- json_object$get_string(
     "rfx_model_spec"
   )
+  if (model_params[["outcome_model"]]$link == "cloglog") {
+    cloglog_num_categories <- json_object$get_scalar("cloglog_num_categories")
+    model_params[["cloglog_num_categories"]] <- cloglog_num_categories
+  } else {
+    model_params[["cloglog_num_categories"]] <- 0
+  }
 
   output[["model_params"]] <- model_params
 
@@ -3206,6 +3795,23 @@ createBARTModelFromJson <- function(json_object) {
       "sigma2_leaf_samples",
       "parameters"
     )
+  }
+  if (
+    model_params[["outcome_model"]]$link == "cloglog" &&
+      model_params[["outcome_model"]]$outcome == "ordinal"
+  ) {
+    cloglog_cutpoint_samples <- matrix(
+      NA_real_,
+      model_params[["cloglog_num_categories"]] - 1,
+      model_params[["num_samples"]]
+    )
+    for (i in 1:(model_params[["cloglog_num_categories"]] - 1)) {
+      cloglog_cutpoint_samples[i, ] <- json_object$get_vector(
+        paste0("cloglog_cutpoint_samples_", i),
+        "parameters"
+      )
+    }
+    output[["cloglog_cutpoint_samples"]] <- cloglog_cutpoint_samples
   }
 
   # Unpack random effects
@@ -3228,43 +3834,10 @@ createBARTModelFromJson <- function(json_object) {
   return(output)
 }
 
-#' @title Convert JSON File to BART Model
-#' @description
-#' Convert a JSON file containing sample information on a trained BART model
-#' to a BART model object which can be used for prediction, etc...
-#'
+#' @title Convert JSON file to BART model
+#' @rdname BARTSerialization
 #' @param json_filename String of filepath, must end in ".json"
-#'
-#' @return Object of type `bartmodel`
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' tmpjson <- tempfile(fileext = ".json")
-#' saveBARTModelToJsonFile(bart_model, file.path(tmpjson))
-#' bart_model_roundtrip <- createBARTModelFromJsonFile(file.path(tmpjson))
-#' unlink(tmpjson)
 createBARTModelFromJsonFile <- function(json_filename) {
   # Load a `CppJson` object from file
   bart_json <- createCppJsonFile(json_filename)
@@ -3275,42 +3848,10 @@ createBARTModelFromJsonFile <- function(json_filename) {
   return(bart_object)
 }
 
-#' @title Convert JSON String to BART Model
-#' @description
-#' Convert a JSON string containing sample information on a trained BART model
-#' to a BART model object which can be used for prediction, etc...
-#'
+#' @title Convert JSON string to BART model
+#' @rdname BARTSerialization
 #' @param json_string JSON string dump
-#'
-#' @return Object of type `bartmodel`
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' bart_json <- saveBARTModelToJsonString(bart_model)
-#' bart_model_roundtrip <- createBARTModelFromJsonString(bart_json)
-#' y_hat_mean_roundtrip <- rowMeans(predict(bart_model_roundtrip, X=X_train)$y_hat)
 createBARTModelFromJsonString <- function(json_string) {
   # Load a `CppJson` object from string
   bart_json <- createCppJsonString(json_string)
@@ -3321,41 +3862,10 @@ createBARTModelFromJsonString <- function(json_string) {
   return(bart_object)
 }
 
-#' @title Convert JSON List to Single BART Model
-#' @description
-#' Convert a list of (in-memory) JSON representations of a BART model to a single combined BART model object
-#' which can be used for prediction, etc...
-#'
+#' @title Convert JSON list to single BART model
+#' @rdname BARTSerialization
 #' @param json_object_list List of objects of type `CppJson` containing Json representation of a BART model
-#'
-#' @return Object of type `bartmodel`
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' bart_json <- list(saveBARTModelToJson(bart_model))
-#' bart_model_roundtrip <- createBARTModelFromCombinedJson(bart_json)
 createBARTModelFromCombinedJson <- function(json_object_list) {
   # Initialize the BCF model
   output <- list()
@@ -3468,11 +3978,28 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
   model_params[["probit_outcome_model"]] <- json_object_default$get_boolean(
     "probit_outcome_model"
   )
+  outcome_model_outcome <- json_object_default$get_string(
+    "outcome",
+    "outcome_model"
+  )
+  outcome_model_link <- json_object_default$get_string("link", "outcome_model")
+  model_params[["outcome_model"]] <- OutcomeModel(
+    outcome = outcome_model_outcome,
+    link = outcome_model_link
+  )
   model_params[["rfx_model_spec"]] <- json_object_default$get_string(
     "rfx_model_spec"
   )
   model_params[["num_chains"]] <- json_object_default$get_scalar("num_chains")
   model_params[["keep_every"]] <- json_object_default$get_scalar("keep_every")
+  if (model_params[["outcome_model"]]$link == "cloglog") {
+    cloglog_num_categories <- json_object_default$get_scalar(
+      "cloglog_num_categories"
+    )
+    model_params[["cloglog_num_categories"]] <- cloglog_num_categories
+  } else {
+    model_params[["cloglog_num_categories"]] <- 0
+  }
 
   # Combine values that are sample-specific
   for (i in 1:length(json_object_list)) {
@@ -3534,6 +4061,29 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
       }
     }
   }
+  if (
+    model_params[["outcome_model"]]$link == "cloglog" &&
+      model_params[["outcome_model"]]$outcome == "ordinal"
+  ) {
+    cloglog_cutpoint_samples <- matrix(
+      NA_real_,
+      model_params[["cloglog_num_categories"]] - 1,
+      model_params[["num_samples"]]
+    )
+    index_start <- 1
+    for (i in 1:length(json_object_list)) {
+      json_object <- json_object_list[[i]]
+      num_samples <- json_object$get_scalar("num_samples")
+      subset_inds <- index_start:(index_start + num_samples - 1)
+      for (j in 1:(model_params[["cloglog_num_categories"]] - 1)) {
+        cloglog_cutpoint_samples[j, subset_inds] <- json_object$get_vector(
+          paste0("cloglog_cutpoint_samples_", j),
+          "parameters"
+        )
+      }
+    }
+    output[["cloglog_cutpoint_samples"]] <- cloglog_cutpoint_samples
+  }
 
   # Unpack random effects
   if (model_params[["has_rfx"]]) {
@@ -3558,41 +4108,10 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
   return(output)
 }
 
-#' @title Convert JSON String List to Single BART Model
-#' @description
-#' Convert a list of (in-memory) JSON strings that represent BART models to a single combined BART model object
-#' which can be used for prediction, etc...
-#'
+#' @title Convert JSON string list to single BART model
+#' @rdname BARTSerialization
 #' @param json_string_list List of JSON strings which can be parsed to objects of type `CppJson` containing Json representation of a BART model
-#'
-#' @return Object of type `bartmodel`
 #' @export
-#'
-#' @examples
-#' n <- 100
-#' p <- 5
-#' X <- matrix(runif(n*p), ncol = p)
-#' f_XW <- (
-#'     ((0 <= X[,1]) & (0.25 > X[,1])) * (-7.5) +
-#'     ((0.25 <= X[,1]) & (0.5 > X[,1])) * (-2.5) +
-#'     ((0.5 <= X[,1]) & (0.75 > X[,1])) * (2.5) +
-#'     ((0.75 <= X[,1]) & (1 > X[,1])) * (7.5)
-#' )
-#' noise_sd <- 1
-#' y <- f_XW + rnorm(n, 0, noise_sd)
-#' test_set_pct <- 0.2
-#' n_test <- round(test_set_pct*n)
-#' n_train <- n - n_test
-#' test_inds <- sort(sample(1:n, n_test, replace = FALSE))
-#' train_inds <- (1:n)[!((1:n) %in% test_inds)]
-#' X_test <- X[test_inds,]
-#' X_train <- X[train_inds,]
-#' y_test <- y[test_inds]
-#' y_train <- y[train_inds]
-#' bart_model <- bart(X_train = X_train, y_train = y_train,
-#'                    num_gfr = 10, num_burnin = 0, num_mcmc = 10)
-#' bart_json_string_list <- list(saveBARTModelToJsonString(bart_model))
-#' bart_model_roundtrip <- createBARTModelFromCombinedJsonString(bart_json_string_list)
 createBARTModelFromCombinedJsonString <- function(json_string_list) {
   # Initialize the BCF model
   output <- list()
@@ -3714,6 +4233,15 @@ createBARTModelFromCombinedJsonString <- function(json_string_list) {
   model_params[["probit_outcome_model"]] <- json_object_default$get_boolean(
     "probit_outcome_model"
   )
+  outcome_model_outcome <- json_object_default$get_string(
+    "outcome",
+    "outcome_model"
+  )
+  outcome_model_link <- json_object_default$get_string("link", "outcome_model")
+  model_params[["outcome_model"]] <- OutcomeModel(
+    outcome = outcome_model_outcome,
+    link = outcome_model_link
+  )
   model_params[["rfx_model_spec"]] <- json_object_default$get_string(
     "rfx_model_spec"
   )
@@ -3777,6 +4305,29 @@ createBARTModelFromCombinedJsonString <- function(json_string_list) {
         )
       }
     }
+  }
+  if (
+    model_params[["outcome_model"]]$link == "cloglog" &&
+      model_params[["outcome_model"]]$outcome == "ordinal"
+  ) {
+    cloglog_cutpoint_samples <- matrix(
+      NA_real_,
+      model_params[["cloglog_num_categories"]] - 1,
+      model_params[["num_samples"]]
+    )
+    index_start <- 1
+    for (i in 1:length(json_object_list)) {
+      json_object <- json_object_list[[i]]
+      num_samples <- json_object$get_scalar("num_samples")
+      subset_inds <- index_start:(index_start + num_samples - 1)
+      for (j in 1:(model_params[["cloglog_num_categories"]] - 1)) {
+        cloglog_cutpoint_samples[j, subset_inds] <- json_object$get_vector(
+          paste0("cloglog_cutpoint_samples_", j),
+          "parameters"
+        )
+      }
+    }
+    output[["cloglog_cutpoint_samples"]] <- cloglog_cutpoint_samples
   }
 
   # Unpack random effects

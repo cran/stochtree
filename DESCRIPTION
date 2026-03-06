@@ -1,7 +1,7 @@
 Package: stochtree
 Title: Stochastic Tree Ensembles (XBART and BART) for Supervised
         Learning and Causal Inference
-Version: 0.3.1
+Version: 0.4.0
 Authors@R: 
   c(
     person("Drew", "Herren", email = "drewherrenopensource@gmail.com", role = c("aut", "cre"), comment = c(ORCID = "0000-0003-4109-6611")), 
@@ -10,6 +10,7 @@ Authors@R:
     person("Carlos", "Carvalho", role = "aut"),
     person("Jingyu", "He", role = "aut"),
     person("Pedro", "Lima", role = "ctb"),
+    person("Entejar", "Alam", role = "ctb"),
     person("stochtree", "contributors", role = c("cph")),
     person("Eigen", "contributors", role = c("cph"), comment = "C++ source uses the Eigen library for matrix operations, see inst/COPYRIGHTS"),
     person("xgboost", "contributors", role = c("cph"), comment = "C++ tree code and related operations include or are inspired by code from the xgboost library, see inst/COPYRIGHTS"),
@@ -24,11 +25,15 @@ Copyright: Copyright details for stochtree's C++ dependencies, which
         detailed in inst/COPYRIGHTS
 Description: Flexible stochastic tree ensemble software. 
     Robust implementations of Bayesian Additive Regression Trees (BART) 
-    Chipman, George, McCulloch (2010) <doi:10.1214/09-AOAS285> 
+    (Chipman, George, McCulloch (2010) <doi:10.1214/09-AOAS285>) 
     for supervised learning and Bayesian Causal Forests (BCF) 
-    Hahn, Murray, Carvalho (2020) <doi:10.1214/19-BA1195> 
+    (Hahn, Murray, Carvalho (2020) <doi:10.1214/19-BA1195>) 
     for causal inference. Enables model serialization and parallel sampling 
     and provides a low-level interface for custom stochastic forest samplers.
+    Includes the grow-from-root algorithm for accelerated forest sampling 
+    (He and Hahn (2021) <doi:10.1080/01621459.2021.1942012>), 
+    a log-linear leaf model for forest-based heteroskedasticity (Murray (2020) <doi:10.1080/01621459.2020.1813587>), 
+    and the cloglog BART model of Alam and Linero (2025) <doi:10.48550/arXiv.2502.00606> for ordinal outcomes.
 License: MIT + file LICENSE
 Encoding: UTF-8
 RoxygenNote: 7.3.3
@@ -40,13 +45,14 @@ URL: https://stochtree.ai/, https://github.com/StochasticTree/stochtree
 BugReports: https://github.com/StochasticTree/stochtree/issues
 Config/testthat/edition: 3
 NeedsCompilation: yes
-Packaged: 2026-02-12 16:43:11 UTC; drew
+Packaged: 2026-03-05 19:14:58 UTC; drew
 Author: Drew Herren [aut, cre] (ORCID: <https://orcid.org/0000-0003-4109-6611>),
   Richard Hahn [aut],
   Jared Murray [aut],
   Carlos Carvalho [aut],
   Jingyu He [aut],
   Pedro Lima [ctb],
+  Entejar Alam [ctb],
   stochtree contributors [cph],
   Eigen contributors [cph] (C++ source uses the Eigen library for matrix
     operations, see inst/COPYRIGHTS),
@@ -67,4 +73,4 @@ Author: Drew Herren [aut, cre] (ORCID: <https://orcid.org/0000-0003-4109-6611>),
     inst/COPYRIGHTS)
 Maintainer: Drew Herren <drewherrenopensource@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-02-12 17:10:03 UTC
+Date/Publication: 2026-03-06 08:10:08 UTC

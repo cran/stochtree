@@ -12,7 +12,7 @@
 #'
 #' This class is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
 #' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
-#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at <https://stochtree.ai/>
 
 ForestModelConfig <- R6::R6Class(
   classname = "ForestModelConfig",
@@ -63,6 +63,12 @@ ForestModelConfig <- R6::R6Class(
     #' @field variance_forest_scale Scale parameter for IG leaf models (applicable when `leaf_model_type = 3`)
     variance_forest_scale = NULL,
 
+    #' @field cloglog_forest_shape Shape parameter for conditional gamma component of cloglog leaf models (applicable when `leaf_model_type = 4`)
+    cloglog_forest_shape = NULL,
+
+    #' @field cloglog_forest_rate Rate parameter for conditional gamma component of cloglog leaf models (applicable when `leaf_model_type = 4`)
+    cloglog_forest_rate = NULL,
+
     #' @field cutpoint_grid_size Number of unique cutpoints to consider
     cutpoint_grid_size = NULL,
 
@@ -86,6 +92,8 @@ ForestModelConfig <- R6::R6Class(
     #' @param leaf_model_scale Scale parameter used in Gaussian leaf models (can either be a scalar or a q x q matrix, where q is the dimensionality of the basis and is only >1 when `leaf_model_int = 2`). Calibrated internally as `1/num_trees`, propagated along diagonal if needed for multivariate leaf models.
     #' @param variance_forest_shape Shape parameter for IG leaf models (applicable when `leaf_model_type = 3`). Default: `1`.
     #' @param variance_forest_scale Scale parameter for IG leaf models (applicable when `leaf_model_type = 3`). Default: `1`.
+    #' @param cloglog_forest_shape Shape parameter for conditional gamma component of cloglog leaf models (applicable when `leaf_model_type = 4`). Default: `1`.
+    #' @param cloglog_forest_rate Rate parameter for conditional gamma component of cloglog leaf models (applicable when `leaf_model_type = 4`). Default: `1`.
     #' @param cutpoint_grid_size Number of unique cutpoints to consider (default: `100`)
     #' @param num_features_subsample Number of features to subsample for the GFR algorithm
     #'
@@ -106,6 +114,8 @@ ForestModelConfig <- R6::R6Class(
       leaf_model_scale = NULL,
       variance_forest_shape = 1.0,
       variance_forest_scale = 1.0,
+      cloglog_forest_shape = 2.0,
+      cloglog_forest_rate = 2.0,
       cutpoint_grid_size = 100,
       num_features_subsample = NULL
     ) {
@@ -161,6 +171,8 @@ ForestModelConfig <- R6::R6Class(
       self$max_depth <- max_depth
       self$variance_forest_shape <- variance_forest_shape
       self$variance_forest_scale <- variance_forest_scale
+      self$cloglog_forest_shape <- cloglog_forest_shape
+      self$cloglog_forest_rate <- cloglog_forest_rate
       self$cutpoint_grid_size <- cutpoint_grid_size
       if (is.null(num_features_subsample)) {
         num_features_subsample <- num_features
@@ -299,6 +311,20 @@ ForestModelConfig <- R6::R6Class(
     },
 
     #' @description
+    #' Update shape parameter for conditional gamma component of cloglog leaf models
+    #' @param cloglog_forest_shape Shape parameter for conditional gamma component of cloglog leaf models
+    update_cloglog_forest_shape = function(cloglog_forest_shape) {
+      self$cloglog_forest_shape <- cloglog_forest_shape
+    },
+
+    #' @description
+    #' Update rate parameter for conditional gamma component of cloglog leaf models
+    #' @param cloglog_forest_rate Rate parameter for conditional gamma component of cloglog leaf models
+    update_cloglog_forest_rate = function(cloglog_forest_rate) {
+      self$cloglog_forest_rate <- cloglog_forest_rate
+    },
+
+    #' @description
     #' Update number of unique cutpoints to consider
     #' @param cutpoint_grid_size Number of unique cutpoints to consider
     update_cutpoint_grid_size = function(cutpoint_grid_size) {
@@ -419,6 +445,20 @@ ForestModelConfig <- R6::R6Class(
     },
 
     #' @description
+    #' Query shape parameter for conditional gamma component of cloglog leaf models for this ForestModelConfig object
+    #' @returns Shape parameter for conditional gamma component of cloglog leaf models
+    get_cloglog_forest_shape = function() {
+      return(self$cloglog_forest_shape)
+    },
+
+    #' @description
+    #' Query rate parameter for conditional gamma component of cloglog leaf models for this ForestModelConfig object
+    #' @returns Rate parameter for conditional gamma component of cloglog leaf models
+    get_cloglog_forest_rate = function() {
+      return(self$cloglog_forest_rate)
+    },
+
+    #' @description
     #' Query number of unique cutpoints to consider for this ForestModelConfig object
     #' @returns Number of unique cutpoints to consider
     get_cutpoint_grid_size = function() {
@@ -448,7 +488,7 @@ ForestModelConfig <- R6::R6Class(
 #'
 #' This class is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
 #' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
-#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at <https://stochtree.ai/>
 
 GlobalModelConfig <- R6::R6Class(
   classname = "GlobalModelConfig",
@@ -482,13 +522,13 @@ GlobalModelConfig <- R6::R6Class(
   )
 )
 
-#' @title Create ForestModelConfig Object
+#' @title Create ForestModelConfig object
 #' @description
 #' Create a forest model config object
 #'
 #' This function is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
 #' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
-#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at <https://stochtree.ai/>
 #'
 #' @param feature_types Vector of integer-coded feature types (integers where 0 = numeric, 1 = ordered categorical, 2 = unordered categorical)
 #' @param sweep_update_indices Vector of (0-indexed) indices of trees to update in a sweep
@@ -505,6 +545,8 @@ GlobalModelConfig <- R6::R6Class(
 #' @param leaf_model_scale Scale parameter used in Gaussian leaf models (can either be a scalar or a q x q matrix, where q is the dimensionality of the basis and is only >1 when `leaf_model_int = 2`). Calibrated internally as `1/num_trees`, propagated along diagonal if needed for multivariate leaf models.
 #' @param variance_forest_shape Shape parameter for IG leaf models (applicable when `leaf_model_type = 3`). Default: `1`.
 #' @param variance_forest_scale Scale parameter for IG leaf models (applicable when `leaf_model_type = 3`). Default: `1`.
+#' @param cloglog_forest_shape Shape parameter for conditional gamma component of cloglog leaf models (applicable when `leaf_model_type = 4`). Default: `1`.
+#' @param cloglog_forest_rate Rate parameter for conditional gamma component of cloglog leaf models (applicable when `leaf_model_type = 4`). Default: `1`.
 #' @param cutpoint_grid_size Number of unique cutpoints to consider (default: `100`)
 #' @param num_features_subsample Number of features to subsample for the GFR algorithm
 #' @return ForestModelConfig object
@@ -528,6 +570,8 @@ createForestModelConfig <- function(
   leaf_model_scale = NULL,
   variance_forest_shape = 1.0,
   variance_forest_scale = 1.0,
+  cloglog_forest_shape = 2.0,
+  cloglog_forest_rate = 2.0,
   cutpoint_grid_size = 100,
   num_features_subsample = NULL
 ) {
@@ -554,13 +598,13 @@ createForestModelConfig <- function(
   ))
 }
 
-#' @title Create GlobalModelConfig Object
+#' @title Create GlobalModelConfig object
 #' @description
 #' Create a global model config object
 #'
 #' This function is intended for advanced use cases in which users require detailed control of sampling algorithms and data structures.
 #' Minimal input validation and error checks are performed -- users are responsible for providing the correct inputs.
-#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at stochtree.ai
+#' For tutorials on the "proper" usage of the stochtree's advanced workflow, we provide several vignettes at <https://stochtree.ai/>
 #'
 #' @param global_error_variance Global error variance parameter (default: `1.0`)
 #' @return GlobalModelConfig object
