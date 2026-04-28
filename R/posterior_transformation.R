@@ -1,4 +1,4 @@
-#' @title Compute contrast for BCF model
+#' @title Compute Contrast for BCF Model
 #' @description
 #' Compute a contrast using a BCF model by making two sets of outcome predictions and taking their difference.
 #' For simple BCF models with binary treatment, this will yield the same prediction as requesting `terms = "cate"`
@@ -247,7 +247,7 @@ computeContrastBCFModel <- function(
   }
 }
 
-#' @title Compute contrast for BART model
+#' @title Compute Contrast for BART Model
 #' @description
 #' Compute a contrast using a BART model by making two sets of outcome predictions and taking their difference.
 #' This function provides the flexibility to compute any contrast of interest by specifying covariates, leaf basis, and random effects
@@ -499,7 +499,7 @@ computeContrastBARTModel <- function(
   }
 }
 
-#' @title Sample BCF posterior predictive
+#' @title Sample BCF Posterior Predictive
 #' @description
 #' Sample from the posterior predictive distribution for outcomes modeled by BCF
 #'
@@ -701,7 +701,7 @@ sampleBCFPosteriorPredictive <- function(
   return(ppd_array)
 }
 
-#' @title Sample BART posterior predictive
+#' @title Sample BART Posterior Predictive
 #' @description
 #' Sample from the posterior predictive distribution for outcomes modeled by BART
 #'
@@ -964,7 +964,7 @@ posterior_predictive_heuristic_multiplier <- function(
   }
 }
 
-#' @title Compute BCF posterior credible intervals
+#' @title Compute BCF Posterior Credible Intervals
 #' @description
 #' Compute posterior credible intervals for specified terms from a fitted BCF model. Supports intervals for prognostic forests, CATE forests, variance forests, random effects, and overall mean outcome predictions.
 #'
@@ -1055,11 +1055,12 @@ computeBCFPosteriorInterval <- function(
       )
     }
   }
-  needs_covariates_intermediate <- ((("y_hat" %in% terms) ||
-    ("all" %in% terms)))
-  needs_covariates <- (("prognostic_function" %in% terms) ||
-    ("cate" %in% terms) ||
-    ("variance_forest" %in% terms) ||
+  predict_terms <- terms
+  needs_covariates_intermediate <- ((("y_hat" %in% predict_terms) ||
+    ("all" %in% predict_terms)))
+  needs_covariates <- (("prognostic_function" %in% predict_terms) ||
+    ("cate" %in% predict_terms) ||
+    ("variance_forest" %in% predict_terms) ||
     (needs_covariates_intermediate))
   if (needs_covariates) {
     if (is.null(X)) {
@@ -1119,10 +1120,10 @@ computeBCFPosteriorInterval <- function(
       }
     }
   }
-  needs_rfx_data_intermediate <- ((("y_hat" %in% terms) ||
-    ("all" %in% terms)) &&
+  needs_rfx_data_intermediate <- ((("y_hat" %in% predict_terms) ||
+    ("all" %in% predict_terms)) &&
     model_object$model_params$has_rfx)
-  needs_rfx_data <- (("rfx" %in% terms) ||
+  needs_rfx_data <- (("rfx" %in% predict_terms) ||
     (needs_rfx_data_intermediate))
   if (needs_rfx_data) {
     if (is.null(rfx_group_ids)) {
@@ -1154,45 +1155,50 @@ computeBCFPosteriorInterval <- function(
     }
   }
 
-  # Compute posterior matrices for the requested model terms
-  predictions <- predict(
-    model_object,
-    X = X,
-    Z = Z,
-    propensity = propensity,
-    rfx_group_ids = rfx_group_ids,
-    rfx_basis = rfx_basis,
-    type = "posterior",
-    terms = terms,
-    scale = scale
-  )
-  has_multiple_terms <- ifelse(is.list(predictions), TRUE, FALSE)
+  result <- list()
 
-  # Compute the interval
-  if (has_multiple_terms) {
-    result <- list()
-    for (term_name in names(predictions)) {
-      if (!is.null(predictions[[term_name]])) {
-        result[[term_name]] <- summarize_interval(
-          predictions[[term_name]],
-          sample_dim = 2,
-          level = level
-        )
-      } else {
-        result[[term_name]] <- NULL
+  # Compute posterior matrices for predict-able terms (if any)
+  if (length(predict_terms) > 0) {
+    predictions <- predict(
+      model_object,
+      X = X,
+      Z = Z,
+      propensity = propensity,
+      rfx_group_ids = rfx_group_ids,
+      rfx_basis = rfx_basis,
+      type = "posterior",
+      terms = predict_terms,
+      scale = scale
+    )
+    if (is.list(predictions)) {
+      for (term_name in names(predictions)) {
+        if (!is.null(predictions[[term_name]])) {
+          result[[term_name]] <- summarize_interval(
+            predictions[[term_name]],
+            sample_dim = 2,
+            level = level
+          )
+        } else {
+          result[[term_name]] <- NULL
+        }
       }
+    } else {
+      result[[predict_terms]] <- summarize_interval(
+        predictions,
+        sample_dim = 2,
+        level = level
+      )
     }
-    return(result)
-  } else {
-    return(summarize_interval(
-      predictions,
-      sample_dim = 2,
-      level = level
-    ))
   }
+
+  # Return single interval directly if only one term was requested
+  if (length(terms) == 1) {
+    return(result[[terms]])
+  }
+  return(result)
 }
 
-#' @title Compute BART posterior credible intervals
+#' @title Compute BART Posterior Credible Intervals
 #' @description
 #' Compute posterior credible intervals for specified terms from a fitted BART model. Supports intervals for mean functions, variance functions, random effects, and overall outcome predictions.
 #'

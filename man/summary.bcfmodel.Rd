@@ -2,7 +2,7 @@
 % Please edit documentation in R/bcf.R
 \name{summary.bcfmodel}
 \alias{summary.bcfmodel}
-\title{Summarize BCF model}
+\title{Summarize BCF Model}
 \usage{
 \method{summary}{bcfmodel}(object, ...)
 }
@@ -15,5 +15,5 @@
 BCF model object unchanged after summarizing
 }
 \description{
-Summarize the BCF with a description of the model that was fit and numeric summaries of any sampled quantities.
+Summarize a BCF fit with a description of the model that was fit and numeric summaries of any sampled quantities.
 }

@@ -800,3 +800,252 @@ test_that("Random Effects BCF", {
     )
   )
 })
+
+test_that("BCF internal propensity model works with data frame covariates", {
+  skip_on_cran()
+
+  # X_test_raw was incorrectly passed to the internal BART propensity model instead of the preprocessed X_test,
+  # causing "undefined columns selected" when X contained factor columns.
+  set.seed(42)
+  n <- 100
+  p <- 4
+  X_num <- matrix(runif(n * p), ncol = p)
+  # Add a factor column — triggers preprocessTrainData to one-hot encode,
+  # changing the column structure and exposing the raw/processed mismatch
+  X_cat <- factor(sample(c("a", "b", "c"), n, replace = TRUE))
+  X <- data.frame(X_num, cat = X_cat)
+
+  pi_X <- 0.25 + 0.5 * X_num[, 1]
+  Z <- rbinom(n, 1, pi_X)
+  mu_X <- X_num[, 1] * 2
+  tau_X <- X_num[, 2]
+  y <- mu_X + tau_X * Z + rnorm(n)
+
+  test_inds <- 1:20
+  train_inds <- 21:n
+  X_train <- X[train_inds, ]
+  X_test <- X[test_inds, ]
+  Z_train <- Z[train_inds]
+  Z_test <- Z[test_inds]
+  y_train <- y[train_inds]
+
+  # No propensity_train provided — triggers internal BART propensity model.
+  # Before the fix, this raised "undefined columns selected" because X_test_raw
+  # (unprocessed) was passed instead of preprocessed X_test.
+  expect_no_error(
+    bcf_model <- bcf(
+      X_train = X_train,
+      y_train = y_train,
+      Z_train = Z_train,
+      X_test = X_test,
+      Z_test = Z_test,
+      num_gfr = 5,
+      num_burnin = 0,
+      num_mcmc = 5
+    )
+  )
+  expect_true(!is.null(bcf_model$tau_hat_train))
+  expect_true(!is.null(bcf_model$tau_hat_test))
+})
+
+test_that("BCF JSON serialization roundtrip covers all deserialization paths", {
+  skip_on_cran()
+
+  # Generate simulated data
+  set.seed(42)
+  n <- 100
+  p <- 5
+  X <- matrix(runif(n * p), ncol = p)
+  pi_x <- 0.25 + 0.5 * X[, 1]
+  mu_x <- pi_x * 5
+  tau_x <- X[, 2] * 2
+  Z <- rbinom(n, 1, pi_x)
+  y <- mu_x + Z * tau_x + rnorm(n, 0, 1)
+  test_set_pct <- 0.2
+  n_test <- round(test_set_pct * n)
+  test_inds <- sort(sample(1:n, n_test, replace = FALSE))
+  train_inds <- (1:n)[!((1:n) %in% test_inds)]
+  X_test <- X[test_inds, ]
+  X_train <- X[train_inds, ]
+  pi_test <- pi_x[test_inds]
+  pi_train <- pi_x[train_inds]
+  Z_test <- Z[test_inds]
+  Z_train <- Z[train_inds]
+  y_train <- y[train_inds]
+
+  # Fit model
+  bcf_model <- bcf(
+    X_train = X_train,
+    Z_train = Z_train,
+    y_train = y_train,
+    propensity_train = pi_train,
+    num_gfr = 0,
+    num_burnin = 0,
+    num_mcmc = 10
+  )
+  preds_orig <- predict(bcf_model, X_test, Z_test, pi_test)
+  y_hat_orig <- rowMeans(preds_orig[["y_hat"]])
+  tau_hat_orig <- rowMeans(preds_orig[["tau_hat"]])
+
+  # Path 1: in-memory JSON object
+  bcf_json <- saveBCFModelToJson(bcf_model)
+  bcf_rt <- createBCFModelFromJson(bcf_json)
+  preds_rt <- predict(bcf_rt, X_test, Z_test, pi_test)
+  expect_equal(rowMeans(preds_rt[["y_hat"]]), y_hat_orig)
+  expect_equal(rowMeans(preds_rt[["tau_hat"]]), tau_hat_orig)
+
+  # Path 2: JSON string
+  bcf_json_string <- saveBCFModelToJsonString(bcf_model)
+  bcf_rt <- createBCFModelFromJsonString(bcf_json_string)
+  preds_rt <- predict(bcf_rt, X_test, Z_test, pi_test)
+  expect_equal(rowMeans(preds_rt[["y_hat"]]), y_hat_orig)
+  expect_equal(rowMeans(preds_rt[["tau_hat"]]), tau_hat_orig)
+
+  # Path 3: JSON file
+  tmpjson <- tempfile(fileext = ".json")
+  saveBCFModelToJsonFile(bcf_model, tmpjson)
+  bcf_rt <- createBCFModelFromJsonFile(tmpjson)
+  unlink(tmpjson)
+  preds_rt <- predict(bcf_rt, X_test, Z_test, pi_test)
+  expect_equal(rowMeans(preds_rt[["y_hat"]]), y_hat_orig)
+  expect_equal(rowMeans(preds_rt[["tau_hat"]]), tau_hat_orig)
+
+  # Path 4: list of in-memory JSON objects (combined)
+  bcf_rt <- createBCFModelFromCombinedJson(list(bcf_json))
+  preds_rt <- predict(bcf_rt, X_test, Z_test, pi_test)
+  expect_equal(rowMeans(preds_rt[["y_hat"]]), y_hat_orig)
+  expect_equal(rowMeans(preds_rt[["tau_hat"]]), tau_hat_orig)
+
+  # Path 5: list of JSON strings (combined)
+  bcf_rt <- createBCFModelFromCombinedJsonString(list(bcf_json_string))
+  preds_rt <- predict(bcf_rt, X_test, Z_test, pi_test)
+  expect_equal(rowMeans(preds_rt[["y_hat"]]), y_hat_orig)
+  expect_equal(rowMeans(preds_rt[["tau_hat"]]), tau_hat_orig)
+})
+
+test_that("BCF factor-valued treatment handling", {
+  skip_on_cran()
+
+  # Shared data: binary treatment DGP
+  n <- 100
+  p <- 5
+  set.seed(42)
+  X <- matrix(runif(n * p), ncol = p)
+  pi_X <- 0.4 + 0.2 * X[, 1]
+  Z_numeric <- rbinom(n, 1, pi_X)
+  tau_X <- 1 + X[, 2]
+  mu_X <- 2 * X[, 3]
+  y <- mu_X + tau_X * Z_numeric + rnorm(n, 0, 1)
+
+  # Binary factor treatment: levels "0" and "1"
+  # Verify the conversion produces 0/1 values identical to the original
+  Z_factor_binary <- factor(Z_numeric)
+  expect_equal(levels(Z_factor_binary), c("0", "1"))
+  expect_equal(as.integer(Z_factor_binary) - 1L, as.integer(Z_numeric))
+
+  # Factor treatment should run without error and emit an informative message
+  expect_message(
+    suppressWarnings(bcf(
+      X_train = X, y_train = y, Z_train = Z_factor_binary,
+      propensity_train = pi_X, num_gfr = 0, num_burnin = 5, num_mcmc = 5
+    )),
+    regexp = "Z_train is a factor"
+  )
+
+  # Logical treatment converted to factor: levels "FALSE" and "TRUE"
+  # as.factor(logical) sorts alphabetically: "FALSE" = 0, "TRUE" = 1
+  Z_logical <- as.logical(Z_numeric)
+  Z_factor_logical <- as.factor(Z_logical)
+  expect_equal(levels(Z_factor_logical), c("FALSE", "TRUE"))
+  expect_equal(as.integer(Z_factor_logical) - 1L, as.integer(Z_numeric))
+
+  expect_message(
+    suppressWarnings(bcf(
+      X_train = X, y_train = y, Z_train = Z_factor_logical,
+      propensity_train = pi_X, num_gfr = 0, num_burnin = 5, num_mcmc = 5
+    )),
+    regexp = "Z_train is a factor"
+  )
+
+  # Factor treatment with more than 2 levels should error immediately
+  Z_factor_categorical <- factor(sample(c("A", "B", "C"), n, replace = TRUE))
+  expect_error(
+    bcf(
+      X_train = X, y_train = y, Z_train = Z_factor_categorical,
+      propensity_train = pi_X, num_gfr = 0, num_burnin = 5, num_mcmc = 5
+    ),
+    regexp = "exactly 2 levels"
+  )
+
+  # predict.bcfmodel should also handle factor Z, raising a warning
+  suppressMessages(
+    bcf_model <- bcf(
+      X_train = X, y_train = y, Z_train = Z_numeric,
+      propensity_train = pi_X, num_gfr = 0, num_burnin = 5, num_mcmc = 5
+    )
+  )
+  expect_warning(
+    predict(bcf_model, X, Z_factor_binary, pi_X),
+    regexp = "Z is a factor"
+  )
+  expect_warning(
+    predict(bcf_model, X, Z_factor_logical, pi_X),
+    regexp = "Z is a factor"
+  )
+  expect_error(
+    predict(bcf_model, X, Z_factor_categorical, pi_X),
+    regexp = "exactly 2 levels"
+  )
+})
+
+test_that("Warmstart BCF reuses internal propensity model", {
+  skip_on_cran()
+
+  set.seed(42)
+  n <- 100
+  p <- 5
+  X <- matrix(runif(n * p), ncol = p)
+  pi_X <- 0.25 + 0.5 * X[, 1]
+  Z <- rbinom(n, 1, pi_X)
+  y <- pi_X * 3 + X[, 2] * Z + rnorm(n, 0, 1)
+  n_test <- 20
+  n_train <- n - n_test
+  train_inds <- 1:n_train
+  test_inds <- (n_train + 1):n
+
+  X_train <- X[train_inds, ]
+  X_test  <- X[test_inds, ]
+  Z_train <- Z[train_inds]
+  Z_test  <- Z[test_inds]
+  y_train <- y[train_inds]
+
+  # Fit first model without propensity — triggers internal propensity BART
+  m1 <- bcf(
+    X_train = X_train, Z_train = Z_train, y_train = y_train,
+    X_test = X_test, Z_test = Z_test,
+    num_gfr = 5, num_burnin = 0, num_mcmc = 10
+  )
+  expect_true(m1$model_params$internal_propensity_model)
+
+  # Propensity predictions from the first model's propensity BART
+  pi_train_m1 <- predict(m1$bart_propensity_model, X = X_train, terms = "y_hat", type = "mean")
+
+  # Warm-start second model from first — propensity model should be reused
+  m1_json <- saveBCFModelToJsonString(m1)
+  m2 <- bcf(
+    X_train = X_train, Z_train = Z_train, y_train = y_train,
+    X_test = X_test, Z_test = Z_test,
+    num_gfr = 0, num_burnin = 0, num_mcmc = 10,
+    previous_model_json = m1_json,
+    previous_model_warmstart_sample_num = 10L
+  )
+  expect_true(m2$model_params$internal_propensity_model)
+
+  # Propensity model reused: predictions on train set should be identical
+  pi_train_m2 <- predict(m2$bart_propensity_model, X = X_train, terms = "y_hat", type = "mean")
+  expect_equal(pi_train_m1, pi_train_m2)
+
+  # Output shapes should be correct
+  expect_equal(dim(m2$y_hat_train), c(n_train, 10))
+  expect_equal(dim(m2$y_hat_test),  c(n_test, 10))
+})

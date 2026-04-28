@@ -1,3 +1,36 @@
+# stochtree 0.4.2
+
+## New Features
+
+* Added support for parametric treatment effect term in BCF [#309](https://github.com/StochasticTree/stochtree/pull/309/)
+* Added support for observation-level weights passed as data arguments to BART and BCF [#333](https://github.com/StochasticTree/stochtree/pull/333)
+
+## Bug Fixes
+
+* Include boost headers in `sdist` for Python package [#362](https://github.com/StochasticTree/stochtree/pull/362)
+* Fixed prediction bug for cloglog BART in R [#361](https://github.com/StochasticTree/stochtree/pull/361)
+* Fixed assignment bug in RFX category tracker data structure [#360](https://github.com/StochasticTree/stochtree/pull/360)
+* Fixed prediction bugs in binary classification sklearn wrapper [#359](https://github.com/StochasticTree/stochtree/pull/359)
+* Fixed several initialization, sampling and prediction bugs for cloglog [#357](https://github.com/StochasticTree/stochtree/pull/357)
+* Fixed num_threads pass-through bug in R BART [#339](https://github.com/StochasticTree/stochtree/pull/339)
+* Fixed probit offset bug in R and Python [#337](https://github.com/StochasticTree/stochtree/pull/337)
+* Standardized multi-chain BCF handling of internal propensity models [#334](https://github.com/StochasticTree/stochtree/pull/334)
+* Fixed multi-chain BCF bugs with the parametric intercept term in R and Python [#326](https://github.com/StochasticTree/stochtree/pull/326)
+* Fixed indexing bugs for multivariate treatment BCF in Python [#326](https://github.com/StochasticTree/stochtree/pull/326)
+* Convert binary factor-valued treatments to 0/1 binary numeric treatment in `bcf()` R function [#332](https://github.com/StochasticTree/stochtree/pull/332)
+
+## Documentation and Other Maintenance
+
+* Add support for python 3.14 and drop 3.8 and 3.9 [#363](https://github.com/StochasticTree/stochtree/pull/363)
+
+# stochtree 0.4.1
+
+## Documentation and Other Maintenance
+
+* Converted all R man page titles to title case [#310](https://github.com/StochasticTree/stochtree/pull/310)
+* Updated Python `summary()` methods to print directly to console rather than return a summary string [#310](https://github.com/StochasticTree/stochtree/pull/310)
+* Updated vendored pybind11 dependency to version 3.0.2 [#310](https://github.com/StochasticTree/stochtree/pull/310)
+
 # stochtree 0.4.0
 
 ## New Features
@@ -41,6 +74,7 @@
 ## New Features
 
 * Added `print`, `summary`, `plot`, and `extract_parameter` generic functions in R for the `bartmodel` and `bcfmodel` classes ([#271](https://github.com/StochasticTree/stochtree/pull/271))
+* Added sklearn-compatible estimator wrapper for `BARTModel` in Python ([#270](https://github.com/StochasticTree/stochtree/pull/270))
 
 ## Bug Fixes
 

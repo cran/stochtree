@@ -60,7 +60,7 @@
 NULL
 #> NULL
 
-#' @title Run BART for supervised learning
+#' @title Run BART for Supervised Learning
 #' @description
 #' Run the BART algorithm for supervised learning.
 #'
@@ -88,6 +88,11 @@ NULL
 #' We do not currently support (but plan to in the near future), test set evaluation for group labels
 #' that were not in the training set.
 #' @param rfx_basis_test (Optional) Test set basis for "random-slope" regression in additive random effects model.
+#' @param observation_weights (Optional) Numeric vector of observation weights of length `nrow(X_train)`. Weights are
+#'   applied as `y_i | - ~ N(mu(X_i), sigma^2 / w_i)`, so larger weights increase an observation's influence on the fit.
+#'   All weights must be non-negative. Default: `NULL` (all observations equally weighted). Compatible with Gaussian
+#'   (continuous/identity) and probit outcome models; not compatible with cloglog link functions. Note: these are
+#'   referred to internally in the C++ layer as "variance weights" (`var_weights`), since they scale the residual variance.
 #' @param num_gfr Number of "warm-start" iterations run using the grow-from-root algorithm (He and Hahn, 2021). Default: 5.
 #' @param num_burnin Number of "burn-in" iterations of the MCMC sampler. Default: 0.
 #' @param num_mcmc Number of "retained" iterations of the MCMC sampler. Default: 100.
@@ -106,7 +111,7 @@ NULL
 #'   - `keep_burnin` Whether or not "burnin" samples should be included in the stored samples of forests and other parameters. Default `FALSE`. Ignored if `num_mcmc = 0`.
 #'   - `keep_gfr` Whether or not "grow-from-root" samples should be included in the stored samples of forests and other parameters. Default `FALSE`. Ignored if `num_mcmc = 0`.
 #'   - `keep_every` How many iterations of the burned-in MCMC sampler should be run before forests and parameters are retained. Default `1`. Setting `keep_every <- k` for some `k > 1` will "thin" the MCMC samples by retaining every `k`-th sample, rather than simply every sample. This can reduce the autocorrelation of the MCMC samples.
-#'   - `num_chains` How many independent MCMC chains should be sampled. If `num_mcmc = 0`, this is ignored. If `num_gfr = 0`, then each chain is run from root for `num_mcmc * keep_every + num_burnin` iterations, with `num_mcmc` samples retained. If `num_gfr > 0`, each MCMC chain will be initialized from a separate GFR ensemble, with the requirement that `num_gfr >= num_chains`. Default: `1`. Note that if `num_chains > 1`, the returned model object will contain samples from all chains, stored consecutively. That is, if there are 4 chains with 100 samples each, the first 100 samples will be from chain 1, the next 100 samples will be from chain 2, etc... For more detail on working with multi-chain BART models, see [the multi chain vignette](https://stochtree.ai/R_docs/pkgdown/articles/MultiChain.html).
+#'   - `num_chains` How many independent MCMC chains should be sampled. If `num_mcmc = 0`, this is ignored. If `num_gfr = 0`, then each chain is run from root for `num_mcmc * keep_every + num_burnin` iterations, with `num_mcmc` samples retained. If `num_gfr > 0`, each MCMC chain will be initialized from a separate GFR ensemble, with the requirement that `num_gfr >= num_chains`. Default: `1`. Note that if `num_chains > 1`, the returned model object will contain samples from all chains, stored consecutively. That is, if there are 4 chains with 100 samples each, the first 100 samples will be from chain 1, the next 100 samples will be from chain 2, etc... For more detail on working with multi-chain BART models, see [the multi chain vignette](https://stochtree.ai/vignettes/multi-chain.html).
 #'   - `verbose` Whether or not to print progress during the sampling loops. Default: `FALSE`.
 #'   - `outcome_model` A structured `OutcomeModel` object that specifies the outcome type and desired link function. This argument pre-empts the legacy (deprecated) `probit_outcome_model` option. Default: `OutcomeModel(outcome='continuous', link='identity')`.
 #'   - `probit_outcome_model` Deprecated in favor of `outcome_model`. Whether or not the outcome should be modeled as explicitly binary via a probit link. If `TRUE`, `y` must only contain the values `0` and `1`. Default: `FALSE`.
@@ -189,6 +194,7 @@ bart <- function(
   leaf_basis_test = NULL,
   rfx_group_ids_test = NULL,
   rfx_basis_test = NULL,
+  observation_weights = NULL,
   num_gfr = 5,
   num_burnin = 0,
   num_mcmc = 100,
@@ -507,6 +513,20 @@ bart <- function(
     include_mean_forest = FALSE
   }
 
+  # observation_weights compatibility checks
+  if (!is.null(observation_weights)) {
+    if (link_is_cloglog) {
+      stop(
+        "observation_weights are not compatible with cloglog link functions."
+      )
+    }
+    if (include_variance_forest) {
+      warning(
+        "Results may be unreliable when observation_weights are deployed alongside a variance forest model."
+      )
+    }
+  }
+
   # Set the variance forest priors if not set
   if (include_variance_forest) {
     if (is.null(a_forest)) {
@@ -529,6 +549,26 @@ bart <- function(
   }
   if (any(variable_weights < 0)) {
     stop("variable_weights cannot have any negative weights")
+  }
+
+  # Observation weight validation
+  if (!is.null(observation_weights)) {
+    if (!is.numeric(observation_weights)) {
+      stop("observation_weights must be a numeric vector")
+    }
+    if (length(observation_weights) != nrow(X_train)) {
+      stop("length(observation_weights) must equal nrow(X_train)")
+    }
+    if (any(observation_weights < 0)) {
+      stop("observation_weights cannot have any negative values")
+    }
+    if (all(observation_weights == 0) && num_gfr > 0) {
+      stop(
+        "observation_weights are all zero (prior sampling mode) but num_gfr > 0. ",
+        "GFR warm-start is data-dependent and ill-defined with zero weights. ",
+        "Set num_gfr = 0 when using all-zero observation_weights."
+      )
+    }
   }
 
   # Check covariates are matrix or dataframe
@@ -1018,7 +1058,9 @@ bart <- function(
   # Handle standardization, prior calibration, and initialization of forest
   # differently for binary and continuous outcomes
   if (link_is_probit) {
-    # Compute a probit-scale offset and fix scale to 1
+    # Probit-scale intercept: center the forest on the population-average latent mean.
+    # The forest predicts mu(X) and y_bar_train is added back at prediction time.
+    # The latent z sampling uses y_bar_train to set the correct truncated normal mean and to center z before the residual update.
     y_bar_train <- qnorm(mean_cpp(as.numeric(y_train)))
     y_std_train <- 1
     standardize <- FALSE
@@ -1217,13 +1259,20 @@ bart <- function(
 
   # Data
   if (leaf_regression) {
-    forest_dataset_train <- createForestDataset(X_train, leaf_basis_train)
+    forest_dataset_train <- createForestDataset(
+      X_train,
+      leaf_basis_train,
+      observation_weights
+    )
     if (has_test) {
       forest_dataset_test <- createForestDataset(X_test, leaf_basis_test)
     }
     requires_basis <- TRUE
   } else {
-    forest_dataset_train <- createForestDataset(X_train)
+    forest_dataset_train <- createForestDataset(
+      X_train,
+      variance_weights = observation_weights
+    )
     if (has_test) {
       forest_dataset_test <- createForestDataset(X_test)
     }
@@ -1544,6 +1593,10 @@ bart <- function(
       if (include_mean_forest) {
         if (link_is_probit) {
           # Sample latent probit variable, z | -
+          # outcome_pred is the centered forest prediction (not including y_bar_train).
+          # The truncated normal mean is outcome_pred + y_bar_train (the full eta on the probit scale).
+          # The residual stored is z - y_bar_train - outcome_pred so the forest sees a
+          # zero-centered signal and the prior shrinkage toward 0 is well-calibrated.
           outcome_pred <- active_forest_mean$predict(
             forest_dataset_train
           )
@@ -1554,15 +1607,16 @@ bart <- function(
             )
             outcome_pred <- outcome_pred + rfx_pred
           }
-          mu0 <- outcome_pred[y_train == 0]
-          mu1 <- outcome_pred[y_train == 1]
+          eta_pred <- outcome_pred + y_bar_train
+          mu0 <- eta_pred[y_train == 0]
+          mu1 <- eta_pred[y_train == 1]
           u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
           u1 <- runif(sum(y_train == 1), pnorm(0 - mu1), 1)
           resid_train[y_train == 0] <- mu0 + qnorm(u0)
           resid_train[y_train == 1] <- mu1 + qnorm(u1)
 
-          # Update outcome
-          outcome_train$update_data(resid_train - outcome_pred)
+          # Update outcome: center z by y_bar_train before passing to forest
+          outcome_train$update_data(resid_train - y_bar_train - outcome_pred)
         }
 
         # Sample mean forest
@@ -1641,6 +1695,7 @@ bart <- function(
           rng = rng,
           forest_model_config = forest_model_config_variance,
           global_model_config = global_model_config,
+          num_threads = num_threads,
           keep_forest = keep_sample,
           gfr = TRUE
         )
@@ -2080,15 +2135,18 @@ bart <- function(
               )
               outcome_pred <- outcome_pred + rfx_pred
             }
-            mu0 <- outcome_pred[y_train == 0]
-            mu1 <- outcome_pred[y_train == 1]
+            eta_pred <- outcome_pred + y_bar_train
+            mu0 <- eta_pred[y_train == 0]
+            mu1 <- eta_pred[y_train == 1]
             u0 <- runif(sum(y_train == 0), 0, pnorm(0 - mu0))
             u1 <- runif(sum(y_train == 1), pnorm(0 - mu1), 1)
             resid_train[y_train == 0] <- mu0 + qnorm(u0)
             resid_train[y_train == 1] <- mu1 + qnorm(u1)
 
-            # Update outcome
-            outcome_train$update_data(resid_train - outcome_pred)
+            # Update outcome: center z by y_bar_train before passing to forest
+            outcome_train$update_data(
+              resid_train - y_bar_train - outcome_pred
+            )
           }
 
           forest_model_mean$sample_one_iteration(
@@ -2099,6 +2157,7 @@ bart <- function(
             rng = rng,
             forest_model_config = forest_model_config_mean,
             global_model_config = global_model_config,
+            num_threads = num_threads,
             keep_forest = keep_sample,
             gfr = FALSE
           )
@@ -2165,6 +2224,7 @@ bart <- function(
             rng = rng,
             forest_model_config = forest_model_config_variance,
             global_model_config = global_model_config,
+            num_threads = num_threads,
             keep_forest = keep_sample,
             gfr = FALSE
           )
@@ -2451,7 +2511,7 @@ bart <- function(
   return(result)
 }
 
-#' @title Predict from a BART model
+#' @title Predict from a BART Model
 #' @description
 #' Predict from a sampled BART model on new data
 #'
@@ -2807,8 +2867,12 @@ predict.bartmodel <- function(
           mean_forest_probabilities[, j, ] <- (1 -
             exp(
               -exp(
-                mean_forest_predictions +
-                  cloglog_cutpoint_samples[j, ]
+                sweep(
+                  mean_forest_predictions,
+                  2,
+                  cloglog_cutpoint_samples[j, ],
+                  "+"
+                )
               )
             ))
         } else if (j == cloglog_num_categories) {
@@ -2821,15 +2885,23 @@ predict.bartmodel <- function(
         } else {
           mean_forest_probabilities[, j, ] <- (exp(
             -exp(
-              mean_forest_predictions +
-                cloglog_cutpoint_samples[j - 1, ]
+              sweep(
+                mean_forest_predictions,
+                2,
+                cloglog_cutpoint_samples[j - 1, ],
+                "+"
+              )
             )
           ) *
             (1 -
               exp(
                 -exp(
-                  mean_forest_predictions +
-                    cloglog_cutpoint_samples[j, ]
+                  sweep(
+                    mean_forest_predictions,
+                    2,
+                    cloglog_cutpoint_samples[j, ],
+                    "+"
+                  )
                 )
               )))
         }
@@ -2916,7 +2988,7 @@ predict.bartmodel <- function(
   }
 }
 
-#' @title Print summary of BART model
+#' @title Print Summary of BART Model
 #' @description Prints a summary of the BART model, including the model terms and their specifications.
 #' @param x The BART model object
 #' @param ... Additional arguments
@@ -3071,8 +3143,8 @@ print.bartmodel <- function(x, ...) {
   invisible(x)
 }
 
-#' @title Summarize BART model fit and parameters
-#' @description Summarize the BART with a description of the model that was fit and numeric summaries of any sampled quantities.
+#' @title Summarize BART Model Fit and Parameters
+#' @description Summarize a BART fit with a description of the model that was fit and numeric summaries of any sampled quantities.
 #' @param object The BART model object
 #' @param ... Additional arguments
 #' @export
@@ -3227,7 +3299,7 @@ summary.bartmodel <- function(object, ...) {
   invisible(object)
 }
 
-#' @title Plot BART model fit
+#' @title Plot BART Model Fit
 #' @description Plot the BART model fit and any relevant sampled quantities. This will default to a traceplot of the global error scale and the in-sample mean forest predictions for the first train set observation. Since `stochtree::bart()` is flexible and it's possible to sample a model with a fixed global error scale and no mean forest, this procedure is adaptive and will attempt to plot a trace of whichever model terms are included if these two default terms are omitted.
 #' @param x The BART model object
 #' @param ... Additional arguments
@@ -3281,7 +3353,7 @@ plot.bartmodel <- function(x, ...) {
   invisible(x)
 }
 
-#' @title Extract random effects samples from BART model
+#' @title Extract Random Effects Samples from BART Model
 #' @description
 #' Extract raw sample values for each of the random effect parameter terms.
 #'
@@ -3354,7 +3426,7 @@ getRandomEffectSamples.bartmodel <- function(object, ...) {
   return(result)
 }
 
-#' @title Extract BART parameter samples
+#' @title Extract BART Parameter Samples
 #' @description Extract a vector, matrix or array of parameter samples from a BART model by name.
 #' Random effects are handled by a separate `getRandomEffectSamples` function due to the complexity of the random effects parameters.
 #' If the requested model term is not found, an error is thrown.
@@ -3475,7 +3547,7 @@ extractParameter.bartmodel <- function(object, term) {
   stop(paste0("term ", term, " is not a valid BART model term"))
 }
 
-#' @title Convert BART model to JSON
+#' @title Convert BART Model to JSON
 #' @rdname BARTSerialization
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
 #' @export
@@ -3538,7 +3610,8 @@ saveBARTModelToJson <- function(object) {
     )
   }
 
-  # Add global parameters
+  # Add version stamp and global parameters
+  jsonobj$add_string("stochtree_version", getStochtreeVersion())
   jsonobj$add_scalar("outcome_scale", object$model_params$outcome_scale)
   jsonobj$add_scalar("outcome_mean", object$model_params$outcome_mean)
   jsonobj$add_boolean("standardize", object$model_params$standardize)
@@ -3637,7 +3710,7 @@ saveBARTModelToJson <- function(object) {
   return(jsonobj)
 }
 
-#' @title Save BART model to JSON file
+#' @title Save BART Model to JSON File
 #' @rdname BARTSerialization
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
 #' @param filename String of filepath, must end in ".json"
@@ -3651,7 +3724,7 @@ saveBARTModelToJsonFile <- function(object, filename) {
   jsonobj$save_file(filename)
 }
 
-#' @title Convert BART model to JSON string
+#' @title Convert BART Model to JSON String
 #' @rdname BARTSerialization
 #' @param object Object of type `bartmodel` containing draws of a BART model and associated sampling outputs.
 #' @export
@@ -3663,13 +3736,22 @@ saveBARTModelToJsonString <- function(object) {
   return(jsonobj$return_json_string())
 }
 
-#' @title Convert JSON to BART model
+#' @title Convert JSON to BART Model
 #' @rdname BARTSerialization
 #' @param json_object Object of type `CppJson` containing Json representation of a BART model
 #' @export
 createBARTModelFromJson <- function(json_object) {
   # Initialize the BCF model
   output <- list()
+
+  # Helpers for optional-field presence checks
+  .ver <- inferStochtreeJsonVersion(json_object)
+  has_field <- function(name) {
+    json_contains_field_cpp(json_object$json_ptr, name)
+  }
+  has_subfolder_field <- function(subfolder, name) {
+    json_contains_field_subfolder_cpp(json_object$json_ptr, subfolder, name)
+  }
 
   # Unpack the forests
   include_mean_forest <- json_object$get_boolean("include_mean_forest")
@@ -3749,31 +3831,99 @@ createBARTModelFromJson <- function(json_object) {
   model_params[["include_mean_forest"]] <- include_mean_forest
   model_params[["include_variance_forest"]] <- include_variance_forest
   model_params[["has_rfx"]] <- json_object$get_boolean("has_rfx")
-  model_params[["has_rfx_basis"]] <- json_object$get_boolean("has_rfx_basis")
-  model_params[["num_rfx_basis"]] <- json_object$get_scalar("num_rfx_basis")
+
+  if (has_field("has_rfx_basis")) {
+    model_params[["has_rfx_basis"]] <- json_object$get_boolean("has_rfx_basis")
+    model_params[["num_rfx_basis"]] <- json_object$get_scalar("num_rfx_basis")
+  } else {
+    model_params[["has_rfx_basis"]] <- FALSE
+    model_params[["num_rfx_basis"]] <- 1
+    warning(paste0(
+      "Fields 'has_rfx_basis' and 'num_rfx_basis' not found in JSON (model appears to have been ",
+      "serialized under stochtree ",
+      .ver,
+      "). Defaulting to FALSE / 1. ",
+      "Re-save your model to suppress this warning."
+    ))
+  }
+
   model_params[["num_gfr"]] <- json_object$get_scalar("num_gfr")
   model_params[["num_burnin"]] <- json_object$get_scalar("num_burnin")
   model_params[["num_mcmc"]] <- json_object$get_scalar("num_mcmc")
   model_params[["num_samples"]] <- json_object$get_scalar("num_samples")
-  model_params[["num_covariates"]] <- json_object$get_scalar("num_covariates")
+  model_params[["num_covariates"]] <- if (has_field("num_covariates")) {
+    json_object$get_scalar("num_covariates")
+  } else {
+    NA_real_
+  }
   model_params[["num_basis"]] <- json_object$get_scalar("num_basis")
-  model_params[["num_chains"]] <- json_object$get_scalar("num_chains")
-  model_params[["keep_every"]] <- json_object$get_scalar("keep_every")
-  model_params[["requires_basis"]] <- json_object$get_boolean(
-    "requires_basis"
-  )
-  model_params[["probit_outcome_model"]] <- json_object$get_boolean(
-    "probit_outcome_model"
-  )
-  outcome_model_outcome <- json_object$get_string("outcome", "outcome_model")
-  outcome_model_link <- json_object$get_string("link", "outcome_model")
+  model_params[["requires_basis"]] <- json_object$get_boolean("requires_basis")
+
+  if (has_field("num_chains")) {
+    model_params[["num_chains"]] <- json_object$get_scalar("num_chains")
+  } else {
+    model_params[["num_chains"]] <- 1
+    warning(paste0(
+      "Field 'num_chains' not found in JSON (model appears to have been serialized under stochtree ",
+      .ver,
+      "). Defaulting to 1. Re-save your model to suppress this warning."
+    ))
+  }
+
+  if (has_field("keep_every")) {
+    model_params[["keep_every"]] <- json_object$get_scalar("keep_every")
+  } else {
+    model_params[["keep_every"]] <- 1
+    warning(paste0(
+      "Field 'keep_every' not found in JSON (model appears to have been serialized under stochtree ",
+      .ver,
+      "). Defaulting to 1. Re-save your model to suppress this warning."
+    ))
+  }
+
+  model_params[["probit_outcome_model"]] <- if (
+    has_field("probit_outcome_model")
+  ) {
+    json_object$get_boolean("probit_outcome_model")
+  } else {
+    FALSE
+  }
+
+  if (
+    has_subfolder_field("outcome_model", "outcome") &&
+      has_subfolder_field("outcome_model", "link")
+  ) {
+    outcome_model_outcome <- json_object$get_string("outcome", "outcome_model")
+    outcome_model_link <- json_object$get_string("link", "outcome_model")
+  } else {
+    outcome_model_outcome <- "continuous"
+    outcome_model_link <- "identity"
+    warning(paste0(
+      "Fields 'outcome' and 'link' not found under 'outcome_model' in JSON (model appears to have ",
+      "been serialized under stochtree ",
+      .ver,
+      "). Defaulting to outcome='continuous', ",
+      "link='identity'. Re-save your model to suppress this warning."
+    ))
+  }
   model_params[["outcome_model"]] <- OutcomeModel(
     outcome = outcome_model_outcome,
     link = outcome_model_link
   )
-  model_params[["rfx_model_spec"]] <- json_object$get_string(
-    "rfx_model_spec"
-  )
+
+  if (has_field("rfx_model_spec")) {
+    model_params[["rfx_model_spec"]] <- json_object$get_string("rfx_model_spec")
+  } else {
+    model_params[["rfx_model_spec"]] <- ""
+    if (model_params[["has_rfx"]]) {
+      warning(paste0(
+        "Field 'rfx_model_spec' not found in JSON (model appears to have been serialized under ",
+        "stochtree ",
+        .ver,
+        "). Defaulting to ''. Re-save your model to suppress this warning."
+      ))
+    }
+  }
   if (model_params[["outcome_model"]]$link == "cloglog") {
     cloglog_num_categories <- json_object$get_scalar("cloglog_num_categories")
     model_params[["cloglog_num_categories"]] <- cloglog_num_categories
@@ -3823,18 +3973,29 @@ createBARTModelFromJson <- function(json_object) {
   }
 
   # Unpack covariate preprocessor
-  preprocessor_metadata_string <- json_object$get_string(
-    "preprocessor_metadata"
-  )
-  output[["train_set_metadata"]] <- createPreprocessorFromJsonString(
-    preprocessor_metadata_string
-  )
+  if (has_field("preprocessor_metadata")) {
+    preprocessor_metadata_string <- json_object$get_string(
+      "preprocessor_metadata"
+    )
+    output[["train_set_metadata"]] <- createPreprocessorFromJsonString(
+      preprocessor_metadata_string
+    )
+  } else {
+    output[["train_set_metadata"]] <- NULL
+    warning(paste0(
+      "Field 'preprocessor_metadata' not found in JSON (model appears to have been serialized ",
+      "under stochtree ",
+      .ver,
+      "). DataFrame covariates will not be supported for prediction. ",
+      "Re-save your model to suppress this warning."
+    ))
+  }
 
   class(output) <- "bartmodel"
   return(output)
 }
 
-#' @title Convert JSON file to BART model
+#' @title Convert JSON File to BART Model
 #' @rdname BARTSerialization
 #' @param json_filename String of filepath, must end in ".json"
 #' @export
@@ -3848,7 +4009,7 @@ createBARTModelFromJsonFile <- function(json_filename) {
   return(bart_object)
 }
 
-#' @title Convert JSON string to BART model
+#' @title Convert JSON String to BART Model
 #' @rdname BARTSerialization
 #' @param json_string JSON string dump
 #' @export
@@ -3862,7 +4023,7 @@ createBARTModelFromJsonString <- function(json_string) {
   return(bart_object)
 }
 
-#' @title Convert JSON list to single BART model
+#' @title Convert JSON List to Single BART Model
 #' @rdname BARTSerialization
 #' @param json_object_list List of objects of type `CppJson` containing Json representation of a BART model
 #' @export
@@ -3873,6 +4034,19 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
   # For scalar / preprocessing details which aren't sample-dependent,
   # defer to the first json
   json_object_default <- json_object_list[[1]]
+
+  # Helpers for optional-field presence checks
+  .ver <- inferStochtreeJsonVersion(json_object_default)
+  has_field <- function(name) {
+    json_contains_field_cpp(json_object_default$json_ptr, name)
+  }
+  has_subfolder_field <- function(subfolder, name) {
+    json_contains_field_subfolder_cpp(
+      json_object_default$json_ptr,
+      subfolder,
+      name
+    )
+  }
 
   # Unpack the forests
   include_mean_forest <- json_object_default$get_boolean(
@@ -3962,36 +4136,109 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
   model_params[["include_mean_forest"]] <- include_mean_forest
   model_params[["include_variance_forest"]] <- include_variance_forest
   model_params[["has_rfx"]] <- json_object_default$get_boolean("has_rfx")
-  model_params[["has_rfx_basis"]] <- json_object_default$get_boolean(
-    "has_rfx_basis"
-  )
-  model_params[["num_rfx_basis"]] <- json_object_default$get_scalar(
-    "num_rfx_basis"
-  )
-  model_params[["num_covariates"]] <- json_object_default$get_scalar(
-    "num_covariates"
-  )
+
+  if (has_field("has_rfx_basis")) {
+    model_params[["has_rfx_basis"]] <- json_object_default$get_boolean(
+      "has_rfx_basis"
+    )
+    model_params[["num_rfx_basis"]] <- json_object_default$get_scalar(
+      "num_rfx_basis"
+    )
+  } else {
+    model_params[["has_rfx_basis"]] <- FALSE
+    model_params[["num_rfx_basis"]] <- 1
+    warning(paste0(
+      "Fields 'has_rfx_basis' and 'num_rfx_basis' not found in JSON (model appears to have been ",
+      "serialized under stochtree ",
+      .ver,
+      "). Defaulting to FALSE / 1. ",
+      "Re-save your model to suppress this warning."
+    ))
+  }
+
+  model_params[["num_covariates"]] <- if (has_field("num_covariates")) {
+    json_object_default$get_scalar("num_covariates")
+  } else {
+    NA_real_
+  }
   model_params[["num_basis"]] <- json_object_default$get_scalar("num_basis")
   model_params[["requires_basis"]] <- json_object_default$get_boolean(
     "requires_basis"
   )
-  model_params[["probit_outcome_model"]] <- json_object_default$get_boolean(
-    "probit_outcome_model"
-  )
-  outcome_model_outcome <- json_object_default$get_string(
-    "outcome",
-    "outcome_model"
-  )
-  outcome_model_link <- json_object_default$get_string("link", "outcome_model")
+
+  model_params[["probit_outcome_model"]] <- if (
+    has_field("probit_outcome_model")
+  ) {
+    json_object_default$get_boolean("probit_outcome_model")
+  } else {
+    FALSE
+  }
+
+  if (
+    has_subfolder_field("outcome_model", "outcome") &&
+      has_subfolder_field("outcome_model", "link")
+  ) {
+    outcome_model_outcome <- json_object_default$get_string(
+      "outcome",
+      "outcome_model"
+    )
+    outcome_model_link <- json_object_default$get_string(
+      "link",
+      "outcome_model"
+    )
+  } else {
+    outcome_model_outcome <- "continuous"
+    outcome_model_link <- "identity"
+    warning(paste0(
+      "Fields 'outcome' and 'link' not found under 'outcome_model' in JSON (model appears to have ",
+      "been serialized under stochtree ",
+      .ver,
+      "). Defaulting to outcome='continuous', ",
+      "link='identity'. Re-save your model to suppress this warning."
+    ))
+  }
   model_params[["outcome_model"]] <- OutcomeModel(
     outcome = outcome_model_outcome,
     link = outcome_model_link
   )
-  model_params[["rfx_model_spec"]] <- json_object_default$get_string(
-    "rfx_model_spec"
-  )
-  model_params[["num_chains"]] <- json_object_default$get_scalar("num_chains")
-  model_params[["keep_every"]] <- json_object_default$get_scalar("keep_every")
+
+  if (has_field("rfx_model_spec")) {
+    model_params[["rfx_model_spec"]] <- json_object_default$get_string(
+      "rfx_model_spec"
+    )
+  } else {
+    model_params[["rfx_model_spec"]] <- ""
+    if (model_params[["has_rfx"]]) {
+      warning(paste0(
+        "Field 'rfx_model_spec' not found in JSON (model appears to have been serialized under ",
+        "stochtree ",
+        .ver,
+        "). Defaulting to ''. Re-save your model to suppress this warning."
+      ))
+    }
+  }
+
+  if (has_field("num_chains")) {
+    model_params[["num_chains"]] <- json_object_default$get_scalar("num_chains")
+  } else {
+    model_params[["num_chains"]] <- 1
+    warning(paste0(
+      "Field 'num_chains' not found in JSON (model appears to have been serialized under stochtree ",
+      .ver,
+      "). Defaulting to 1. Re-save your model to suppress this warning."
+    ))
+  }
+
+  if (has_field("keep_every")) {
+    model_params[["keep_every"]] <- json_object_default$get_scalar("keep_every")
+  } else {
+    model_params[["keep_every"]] <- 1
+    warning(paste0(
+      "Field 'keep_every' not found in JSON (model appears to have been serialized under stochtree ",
+      .ver,
+      "). Defaulting to 1. Re-save your model to suppress this warning."
+    ))
+  }
   if (model_params[["outcome_model"]]$link == "cloglog") {
     cloglog_num_categories <- json_object_default$get_scalar(
       "cloglog_num_categories"
@@ -4097,18 +4344,29 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
   }
 
   # Unpack covariate preprocessor
-  preprocessor_metadata_string <- json_object$get_string(
-    "preprocessor_metadata"
-  )
-  output[["train_set_metadata"]] <- createPreprocessorFromJsonString(
-    preprocessor_metadata_string
-  )
+  if (has_field("preprocessor_metadata")) {
+    preprocessor_metadata_string <- json_object_default$get_string(
+      "preprocessor_metadata"
+    )
+    output[["train_set_metadata"]] <- createPreprocessorFromJsonString(
+      preprocessor_metadata_string
+    )
+  } else {
+    output[["train_set_metadata"]] <- NULL
+    warning(paste0(
+      "Field 'preprocessor_metadata' not found in JSON (model appears to have been serialized ",
+      "under stochtree ",
+      .ver,
+      "). DataFrame covariates will not be supported for prediction. ",
+      "Re-save your model to suppress this warning."
+    ))
+  }
 
   class(output) <- "bartmodel"
   return(output)
 }
 
-#' @title Convert JSON string list to single BART model
+#' @title Convert JSON String List to Single BART Model
 #' @rdname BARTSerialization
 #' @param json_string_list List of JSON strings which can be parsed to objects of type `CppJson` containing Json representation of a BART model
 #' @export
@@ -4126,6 +4384,19 @@ createBARTModelFromCombinedJsonString <- function(json_string_list) {
   # For scalar / preprocessing details which aren't sample-dependent,
   # defer to the first json
   json_object_default <- json_object_list[[1]]
+
+  # Helpers for optional-field presence checks
+  .ver <- inferStochtreeJsonVersion(json_object_default)
+  has_field <- function(name) {
+    json_contains_field_cpp(json_object_default$json_ptr, name)
+  }
+  has_subfolder_field <- function(subfolder, name) {
+    json_contains_field_subfolder_cpp(
+      json_object_default$json_ptr,
+      subfolder,
+      name
+    )
+  }
 
   # Unpack the forests
   include_mean_forest <- json_object_default$get_boolean(
@@ -4215,36 +4486,118 @@ createBARTModelFromCombinedJsonString <- function(json_string_list) {
   model_params[["include_mean_forest"]] <- include_mean_forest
   model_params[["include_variance_forest"]] <- include_variance_forest
   model_params[["has_rfx"]] <- json_object_default$get_boolean("has_rfx")
-  model_params[["has_rfx_basis"]] <- json_object_default$get_boolean(
-    "has_rfx_basis"
-  )
-  model_params[["num_rfx_basis"]] <- json_object_default$get_scalar(
-    "num_rfx_basis"
-  )
-  model_params[["num_covariates"]] <- json_object_default$get_scalar(
-    "num_covariates"
-  )
+
+  if (has_field("has_rfx_basis")) {
+    model_params[["has_rfx_basis"]] <- json_object_default$get_boolean(
+      "has_rfx_basis"
+    )
+    model_params[["num_rfx_basis"]] <- json_object_default$get_scalar(
+      "num_rfx_basis"
+    )
+  } else {
+    model_params[["has_rfx_basis"]] <- FALSE
+    model_params[["num_rfx_basis"]] <- 1
+    warning(paste0(
+      "Fields 'has_rfx_basis' and 'num_rfx_basis' not found in JSON (model appears to have been ",
+      "serialized under stochtree ",
+      .ver,
+      "). Defaulting to FALSE / 1. ",
+      "Re-save your model to suppress this warning."
+    ))
+  }
+
+  model_params[["num_covariates"]] <- if (has_field("num_covariates")) {
+    json_object_default$get_scalar("num_covariates")
+  } else {
+    NA_real_
+  }
   model_params[["num_basis"]] <- json_object_default$get_scalar("num_basis")
-  model_params[["num_chains"]] <- json_object_default$get_scalar("num_chains")
-  model_params[["keep_every"]] <- json_object_default$get_scalar("keep_every")
   model_params[["requires_basis"]] <- json_object_default$get_boolean(
     "requires_basis"
   )
-  model_params[["probit_outcome_model"]] <- json_object_default$get_boolean(
-    "probit_outcome_model"
-  )
-  outcome_model_outcome <- json_object_default$get_string(
-    "outcome",
-    "outcome_model"
-  )
-  outcome_model_link <- json_object_default$get_string("link", "outcome_model")
+
+  model_params[["probit_outcome_model"]] <- if (
+    has_field("probit_outcome_model")
+  ) {
+    json_object_default$get_boolean("probit_outcome_model")
+  } else {
+    FALSE
+  }
+
+  if (
+    has_subfolder_field("outcome_model", "outcome") &&
+      has_subfolder_field("outcome_model", "link")
+  ) {
+    outcome_model_outcome <- json_object_default$get_string(
+      "outcome",
+      "outcome_model"
+    )
+    outcome_model_link <- json_object_default$get_string(
+      "link",
+      "outcome_model"
+    )
+  } else {
+    outcome_model_outcome <- "continuous"
+    outcome_model_link <- "identity"
+    warning(paste0(
+      "Fields 'outcome' and 'link' not found under 'outcome_model' in JSON (model appears to have ",
+      "been serialized under stochtree ",
+      .ver,
+      "). Defaulting to outcome='continuous', ",
+      "link='identity'. Re-save your model to suppress this warning."
+    ))
+  }
   model_params[["outcome_model"]] <- OutcomeModel(
     outcome = outcome_model_outcome,
     link = outcome_model_link
   )
-  model_params[["rfx_model_spec"]] <- json_object_default$get_string(
-    "rfx_model_spec"
-  )
+
+  if (has_field("rfx_model_spec")) {
+    model_params[["rfx_model_spec"]] <- json_object_default$get_string(
+      "rfx_model_spec"
+    )
+  } else {
+    model_params[["rfx_model_spec"]] <- ""
+    if (model_params[["has_rfx"]]) {
+      warning(paste0(
+        "Field 'rfx_model_spec' not found in JSON (model appears to have been serialized under ",
+        "stochtree ",
+        .ver,
+        "). Defaulting to ''. Re-save your model to suppress this warning."
+      ))
+    }
+  }
+
+  if (has_field("num_chains")) {
+    model_params[["num_chains"]] <- json_object_default$get_scalar("num_chains")
+  } else {
+    model_params[["num_chains"]] <- 1
+    warning(paste0(
+      "Field 'num_chains' not found in JSON (model appears to have been serialized under stochtree ",
+      .ver,
+      "). Defaulting to 1. Re-save your model to suppress this warning."
+    ))
+  }
+
+  if (has_field("keep_every")) {
+    model_params[["keep_every"]] <- json_object_default$get_scalar("keep_every")
+  } else {
+    model_params[["keep_every"]] <- 1
+    warning(paste0(
+      "Field 'keep_every' not found in JSON (model appears to have been serialized under stochtree ",
+      .ver,
+      "). Defaulting to 1. Re-save your model to suppress this warning."
+    ))
+  }
+
+  if (model_params[["outcome_model"]]$link == "cloglog") {
+    cloglog_num_categories <- json_object_default$get_scalar(
+      "cloglog_num_categories"
+    )
+    model_params[["cloglog_num_categories"]] <- cloglog_num_categories
+  } else {
+    model_params[["cloglog_num_categories"]] <- 0
+  }
 
   # Combine values that are sample-specific
   for (i in 1:length(json_object_list)) {
@@ -4342,12 +4695,23 @@ createBARTModelFromCombinedJsonString <- function(json_string_list) {
   }
 
   # Unpack covariate preprocessor
-  preprocessor_metadata_string <- json_object_default$get_string(
-    "preprocessor_metadata"
-  )
-  output[["train_set_metadata"]] <- createPreprocessorFromJsonString(
-    preprocessor_metadata_string
-  )
+  if (has_field("preprocessor_metadata")) {
+    preprocessor_metadata_string <- json_object_default$get_string(
+      "preprocessor_metadata"
+    )
+    output[["train_set_metadata"]] <- createPreprocessorFromJsonString(
+      preprocessor_metadata_string
+    )
+  } else {
+    output[["train_set_metadata"]] <- NULL
+    warning(paste0(
+      "Field 'preprocessor_metadata' not found in JSON (model appears to have been serialized ",
+      "under stochtree ",
+      .ver,
+      "). DataFrame covariates will not be supported for prediction. ",
+      "Re-save your model to suppress this warning."
+    ))
+  }
 
   class(output) <- "bartmodel"
   return(output)
