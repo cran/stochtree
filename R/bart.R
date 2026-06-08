@@ -115,7 +115,7 @@ NULL
 #'   - `verbose` Whether or not to print progress during the sampling loops. Default: `FALSE`.
 #'   - `outcome_model` A structured `OutcomeModel` object that specifies the outcome type and desired link function. This argument pre-empts the legacy (deprecated) `probit_outcome_model` option. Default: `OutcomeModel(outcome='continuous', link='identity')`.
 #'   - `probit_outcome_model` Deprecated in favor of `outcome_model`. Whether or not the outcome should be modeled as explicitly binary via a probit link. If `TRUE`, `y` must only contain the values `0` and `1`. Default: `FALSE`.
-#'   - `num_threads` Number of threads to use in the GFR and MCMC algorithms, as well as prediction. If OpenMP is not available on a user's setup, this will default to `1`, otherwise to the maximum number of available threads.
+#'   - `num_threads` Number of threads to use in the GFR and MCMC algorithms, as well as prediction. Defaults to `1` (single-threaded). Set to `-1` to use the maximum number of available threads, or a positive integer for a specific count. OpenMP must be available for values other than `1`.
 #'
 #' @param mean_forest_params (Optional) A list of mean forest model parameters, each of which has a default value processed internally, so this argument list is optional.
 #'
@@ -222,7 +222,7 @@ bart <- function(
     verbose = FALSE,
     outcome_model = OutcomeModel(outcome = "continuous", link = "identity"),
     probit_outcome_model = FALSE,
-    num_threads = -1
+    num_threads = 1
   )
   general_params_updated <- preprocessParams(
     general_params_default,
@@ -2854,58 +2854,28 @@ predict.bartmodel <- function(
     } else if (is_ordinal_cloglog) {
       cloglog_num_categories <- object$model_params$cloglog_num_categories
       cloglog_cutpoint_samples <- object$cloglog_cutpoint_samples
+      n_obs_pred <- nrow(X)
+      n_samp_pred <- object$model_params$num_samples
       mean_forest_probabilities <- array(
         NA_real_,
-        dim = c(
-          nrow(X),
-          cloglog_num_categories,
-          object$model_params$num_samples
-        )
+        dim = c(n_obs_pred, cloglog_num_categories, n_samp_pred)
       )
-      for (j in 1:cloglog_num_categories) {
-        if (j == 1) {
-          mean_forest_probabilities[, j, ] <- (1 -
-            exp(
-              -exp(
-                sweep(
-                  mean_forest_predictions,
-                  2,
-                  cloglog_cutpoint_samples[j, ],
-                  "+"
-                )
-              )
-            ))
-        } else if (j == cloglog_num_categories) {
-          mean_forest_probabilities[, j, ] <- 1 -
-            apply(
-              mean_forest_probabilities[, 1:(j - 1), , drop = FALSE],
-              c(1, 3),
-              sum
-            )
-        } else {
-          mean_forest_probabilities[, j, ] <- (exp(
-            -exp(
-              sweep(
-                mean_forest_predictions,
-                2,
-                cloglog_cutpoint_samples[j - 1, ],
-                "+"
-              )
-            )
-          ) *
-            (1 -
-              exp(
-                -exp(
-                  sweep(
-                    mean_forest_predictions,
-                    2,
-                    cloglog_cutpoint_samples[j, ],
-                    "+"
-                  )
-                )
-              )))
-        }
+      # Sequential ordinal cloglog: P(Y=k) = prod_{j<k} S_j * (1 - S_k)
+      # S_k = exp(-exp(gamma_k + f)), running survival product across k.
+      survival_product <- matrix(1.0, nrow = n_obs_pred, ncol = n_samp_pred)
+      for (k in seq_len(cloglog_num_categories - 1)) {
+        S_k <- exp(
+          -exp(sweep(
+            mean_forest_predictions,
+            2,
+            cloglog_cutpoint_samples[k, ],
+            "+"
+          ))
+        )
+        mean_forest_probabilities[, k, ] <- survival_product * (1 - S_k)
+        survival_product <- survival_product * S_k
       }
+      mean_forest_probabilities[, cloglog_num_categories, ] <- survival_product
       if (predict_y_hat) {
         y_hat <- mean_forest_probabilities
       }
@@ -3736,6 +3706,21 @@ saveBARTModelToJsonString <- function(object) {
   return(jsonobj$return_json_string())
 }
 
+# Reconstruct mean-forest leaf-model metadata that is not serialized directly.
+# These fields are fully determined by num_basis (a basis/regression leaf model
+# has num_basis > 0), so we derive them on load rather than store redundant
+# copies. Restoring them keeps print()/summary()/predict() working on a
+# reloaded model (they were previously NULL and errored).
+.reconstructBartLeafModelFields <- function(model_params) {
+  num_basis <- model_params[["num_basis"]]
+  has_basis <- isTRUE(num_basis > 0)
+  model_params[["has_basis"]] <- has_basis
+  model_params[["leaf_regression"]] <- has_basis
+  model_params[["is_leaf_constant"]] <- !has_basis
+  model_params[["leaf_dimension"]] <- if (has_basis) num_basis else 1
+  model_params
+}
+
 #' @title Convert JSON to BART Model
 #' @rdname BARTSerialization
 #' @param json_object Object of type `CppJson` containing Json representation of a BART model
@@ -3857,6 +3842,7 @@ createBARTModelFromJson <- function(json_object) {
     NA_real_
   }
   model_params[["num_basis"]] <- json_object$get_scalar("num_basis")
+  model_params <- .reconstructBartLeafModelFields(model_params)
   model_params[["requires_basis"]] <- json_object$get_boolean("requires_basis")
 
   if (has_field("num_chains")) {
@@ -4162,6 +4148,7 @@ createBARTModelFromCombinedJson <- function(json_object_list) {
     NA_real_
   }
   model_params[["num_basis"]] <- json_object_default$get_scalar("num_basis")
+  model_params <- .reconstructBartLeafModelFields(model_params)
   model_params[["requires_basis"]] <- json_object_default$get_boolean(
     "requires_basis"
   )
@@ -4512,6 +4499,7 @@ createBARTModelFromCombinedJsonString <- function(json_string_list) {
     NA_real_
   }
   model_params[["num_basis"]] <- json_object_default$get_scalar("num_basis")
+  model_params <- .reconstructBartLeafModelFields(model_params)
   model_params[["requires_basis"]] <- json_object_default$get_boolean(
     "requires_basis"
   )

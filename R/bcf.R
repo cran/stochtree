@@ -126,7 +126,7 @@ NULL
 #'   - `verbose` Whether or not to print progress during the sampling loops. Default: `FALSE`.
 #'   - `outcome_model` A structured `OutcomeModel` object that specifies the outcome type and desired link function. This argument pre-empts the legacy (deprecated) `probit_outcome_model` option. Default: `OutcomeModel(outcome='continuous', link='identity')`.
 #'   - `probit_outcome_model` Deprecated in favor of `outcome_model`. Whether or not the outcome should be modeled as explicitly binary via a probit link. If `TRUE`, `y` must only contain the values `0` and `1`. Default: `FALSE`.
-#'   - `num_threads` Number of threads to use in the GFR and MCMC algorithms, as well as prediction. If OpenMP is not available on a user's setup, this will default to `1`, otherwise to the maximum number of available threads.
+#'   - `num_threads` Number of threads to use in the GFR and MCMC algorithms, as well as prediction. Defaults to `1` (single-threaded). Set to `-1` to use the maximum number of available threads, or a positive integer for a specific count. OpenMP must be available for values other than `1`.
 #'
 #' @param prognostic_forest_params (Optional) A list of prognostic forest model parameters, each of which has a default value processed internally, so this argument list is optional.
 #'
@@ -283,7 +283,7 @@ bcf <- function(
     verbose = FALSE,
     outcome_model = OutcomeModel(outcome = "continuous", link = "identity"),
     probit_outcome_model = FALSE,
-    num_threads = -1
+    num_threads = 1
   )
   general_params_updated <- preprocessParams(
     general_params_default,
@@ -3076,13 +3076,12 @@ bcf <- function(
     tau_hat_train <- forest_samples_tau$predict_raw(forest_dataset_train) *
       y_std_train
   }
-  # tau_hat_train stores the forest-only component tau(X); compute cate_train
-  # (tau_0 + tau(X)) separately for the treatment term used in y_hat
+  # Fold tau_0 into tau_hat_train so it holds the full CATE (tau_0 + tau(X))
   if (sample_tau_0) {
     tau_0_vec <- as.numeric(tau_0_samples) # num_retained_samples vector (scalar treatment)
     if (adaptive_coding) {
       # CATE = (b_1 - b_0) * (tau_0 + tau(X)); control adj to mu = b_0 * (tau_0 + tau(X))
-      cate_train <- sweep(
+      tau_hat_train <- sweep(
         tau_hat_train,
         2,
         (b_1_samples - b_0_samples) * tau_0_vec * y_std_train,
@@ -3095,20 +3094,17 @@ bcf <- function(
         "+"
       )
     } else if (!has_multivariate_treatment) {
-      cate_train <- sweep(tau_hat_train, 2, tau_0_vec * y_std_train, "+")
+      tau_hat_train <- sweep(tau_hat_train, 2, tau_0_vec * y_std_train, "+")
     } else {
       # tau_hat_train: n x p x num_retained_samples; tau_0_samples: p x num_retained_samples
-      cate_train <- tau_hat_train
       for (j in seq_len(p_tau0)) {
-        cate_train[, j, ] <- cate_train[, j, ] +
+        tau_hat_train[, j, ] <- tau_hat_train[, j, ] +
           outer(rep(1, nrow(X_train)), tau_0_samples[j, ] * y_std_train)
       }
     }
-  } else {
-    cate_train <- tau_hat_train
   }
   if (has_multivariate_treatment) {
-    tau_train_dim <- dim(cate_train)
+    tau_train_dim <- dim(tau_hat_train)
     tau_num_obs <- tau_train_dim[1]
     tau_num_samples <- tau_train_dim[3]
     treatment_term_train <- matrix(
@@ -3118,11 +3114,11 @@ bcf <- function(
     )
     for (i in 1:nrow(Z_train)) {
       treatment_term_train[i, ] <- colSums(
-        cate_train[i, , ] * Z_train[i, ]
+        tau_hat_train[i, , ] * Z_train[i, ]
       )
     }
   } else {
-    treatment_term_train <- cate_train * as.numeric(Z_train)
+    treatment_term_train <- tau_hat_train * as.numeric(Z_train)
   }
   y_hat_train <- mu_hat_train + treatment_term_train
   if (has_test) {
@@ -3145,10 +3141,10 @@ bcf <- function(
       ) *
         y_std_train
     }
-    # tau_hat_test stores forest-only tau(X); compute cate_test for y_hat
+    # Fold tau_0 into tau_hat_test so it holds the full CATE (tau_0 + tau(X))
     if (sample_tau_0) {
       if (adaptive_coding) {
-        cate_test <- sweep(
+        tau_hat_test <- sweep(
           tau_hat_test,
           2,
           (b_1_samples - b_0_samples) * tau_0_vec * y_std_train,
@@ -3161,19 +3157,16 @@ bcf <- function(
           "+"
         )
       } else if (!has_multivariate_treatment) {
-        cate_test <- sweep(tau_hat_test, 2, tau_0_vec * y_std_train, "+")
+        tau_hat_test <- sweep(tau_hat_test, 2, tau_0_vec * y_std_train, "+")
       } else {
-        cate_test <- tau_hat_test
         for (j in seq_len(p_tau0)) {
-          cate_test[, j, ] <- cate_test[, j, ] +
+          tau_hat_test[, j, ] <- tau_hat_test[, j, ] +
             outer(rep(1, nrow(X_test)), tau_0_samples[j, ] * y_std_train)
         }
       }
-    } else {
-      cate_test <- tau_hat_test
     }
     if (has_multivariate_treatment) {
-      tau_test_dim <- dim(cate_test)
+      tau_test_dim <- dim(tau_hat_test)
       tau_num_obs <- tau_test_dim[1]
       tau_num_samples <- tau_test_dim[3]
       treatment_term_test <- matrix(
@@ -3183,11 +3176,11 @@ bcf <- function(
       )
       for (i in 1:nrow(Z_test)) {
         treatment_term_test[i, ] <- colSums(
-          cate_test[i, , ] * Z_test[i, ]
+          tau_hat_test[i, , ] * Z_test[i, ]
         )
       }
     } else {
-      treatment_term_test <- cate_test * as.numeric(Z_test)
+      treatment_term_test <- tau_hat_test * as.numeric(Z_test)
     }
     y_hat_test <- mu_hat_test + treatment_term_test
   }
@@ -3390,7 +3383,18 @@ bcf <- function(
 #' that were not in the training set.
 #' @param rfx_basis (Optional) Test set basis for "random-slope" regression in additive random effects model. If the model was sampled with a random effects `model_spec` of "intercept_only" or "intercept_plus_treatment", this is optional, but if it is provided, it will be used.
 #' @param type (Optional) Type of prediction to return. Options are "mean", which averages the predictions from every draw of a BCF model, and "posterior", which returns the entire matrix of posterior predictions. Default: "posterior".
-#' @param terms (Optional) Which model terms to include in the prediction. This can be a single term or a list of model terms. Options include "y_hat", "prognostic_function", "mu", "cate", "tau", "rfx", "variance_forest", or "all". If a model doesn't have random effects or variance forest predictions, but one of those terms is request, the request will simply be ignored. If a model has random effects fit with either "intercept_only" or "intercept_plus_treatment" model_spec, then "prognostic_function" refers to the predictions of the prognostic forest plus the random intercept and "cate" refers to the predictions of the treatment effect forest plus the random slope on the treatment variable. For these models, the forest predictions alone can be requested via "mu" (prognostic forest) and "tau" (treatment effect forest). In all other cases, "mu" will return exactly the same result as "prognostic_function" and "tau" will return exactly the same result as "cate". If none of the requested terms are present in a model, this function will return `NULL` along with a warning. Default: "all".
+#' @param terms (Optional) Which model terms to include in the prediction. Options include `"y_hat"`, `"prognostic_function"`, `"mu"`, `"cate"`, `"tau"`, `"rfx"`, `"variance_forest"`, or `"all"`.
+#'
+#'   The treatment effect terms follow a three-level hierarchy:
+#'   \itemize{
+#'     \item `"tau"` returns `tau_0 + tau(X)`: the parametric treatment intercept (if sampled) plus the treatment forest. This matches `model$tau_hat_train` / `model$tau_hat_test`.
+#'     \item `"cate"` additionally folds in the random slope on treatment when random effects are fit with `rfx_model_spec = "intercept_plus_treatment"`; otherwise it is identical to `"tau"`.
+#'     \item The raw forest-only component (without `tau_0`) is not directly returned by this method; use `model$forests_tau` to access it.
+#'   }
+#'
+#'   Similarly for the prognostic term: `"mu"` returns the prognostic forest only, while `"prognostic_function"` additionally folds in the random intercept when `rfx_model_spec` is `"intercept_only"` or `"intercept_plus_treatment"`; otherwise the two are identical.
+#'
+#'   If a model doesn't have random effects or variance forest predictions but one of those terms is requested, the request will simply be ignored. If none of the requested terms are present, this function will return `NULL` along with a warning. Default: `"all"`.
 #' @param scale (Optional) Scale of mean function predictions. Options are "linear", which returns predictions on the original scale of the mean forest / RFX terms, and "probability", which transforms predictions into a probability of observing `y == 1`. "probability" is only valid for models fit with a probit outcome model. Default: "linear".
 #' @param ... (Optional) Other prediction parameters.
 #'
@@ -3572,7 +3576,9 @@ predict.bcfmodel <- function(
   predict_mu_forest_intermediate <- ((predict_y_hat || predict_prog_function) &&
     has_mu_forest)
   predict_tau_forest_intermediate <- ((predict_y_hat ||
-    predict_cate_function) &&
+    predict_cate_function ||
+    (object$model_params$adaptive_coding &&
+      (predict_mu_forest || predict_prog_function))) &&
     has_tau_forest)
 
   # Make sure covariates are matrix or data frame
@@ -3608,16 +3614,6 @@ predict.bcfmodel <- function(
   }
 
   # Data checks
-  if (
-    (object$model_params$propensity_covariate != "none") &&
-      (is.null(propensity))
-  ) {
-    if (!object$model_params$internal_propensity_model) {
-      stop("propensity must be provided for this model")
-    }
-    # Compute propensity score using the internal bart model
-    propensity <- rowMeans(predict(object$bart_propensity_model, X)$y_hat)
-  }
   if (nrow(X) != nrow(Z)) {
     stop("X and Z must have the same number of rows")
   }
@@ -3644,9 +3640,22 @@ predict.bcfmodel <- function(
     }
   }
 
-  # Preprocess covariates
+  # Preprocess covariates before any prediction calls that depend on X being
+  # a numeric matrix (e.g. the internal propensity BART model was trained on a
+  # preprocessed matrix, so it expects a matrix, not the raw data frame)
   train_set_metadata <- object$train_set_metadata
   X <- preprocessPredictionData(X, train_set_metadata)
+
+  # Compute propensity score using the internal bart model
+  if (
+    (object$model_params$propensity_covariate != "none") &&
+      (is.null(propensity))
+  ) {
+    if (!object$model_params$internal_propensity_model) {
+      stop("propensity must be provided for this model")
+    }
+    propensity <- rowMeans(predict(object$bart_propensity_model, X)$y_hat)
+  }
 
   # Recode group IDs to integer vector (if passed as, for example, a vector of county names, etc...)
   if (!is.null(rfx_group_ids)) {
@@ -3872,7 +3881,7 @@ predict.bcfmodel <- function(
         mu_hat <- pnorm(mu_hat_forest)
       }
       if (predict_tau_forest) {
-        tau_hat <- pnorm(tau_hat_forest)
+        tau_hat <- pnorm(cate_hat_forest)
       }
       if (predict_prog_function) {
         prognostic_function <- pnorm(prognostic_function)
@@ -3894,7 +3903,7 @@ predict.bcfmodel <- function(
         mu_hat <- mu_hat_forest
       }
       if (predict_tau_forest) {
-        tau_hat <- tau_hat_forest
+        tau_hat <- cate_hat_forest
       }
       if (predict_prog_function) {
         prognostic_function <- prognostic_function
@@ -4828,6 +4837,11 @@ saveBCFModelToJson <- function(object) {
     object$model_params$multivariate_treatment
   )
   jsonobj$add_boolean("adaptive_coding", object$model_params$adaptive_coding)
+  jsonobj$add_boolean(
+    "binary_treatment",
+    object$model_params$binary_treatment
+  )
+  jsonobj$add_scalar("treatment_dim", object$model_params$treatment_dim)
   jsonobj$add_boolean("sample_tau_0", object$model_params$sample_tau_0)
   jsonobj$add_boolean(
     "internal_propensity_model",
@@ -4945,6 +4959,32 @@ saveBCFModelToJsonString <- function(object) {
   return(jsonobj$return_json_string())
 }
 
+# Recover `binary_treatment` for legacy BCF JSON written before the field was
+# serialized. Two sample-time invariants make this exact in most cases:
+#   * multivariate treatment is never binary, and
+#   * adaptive_coding is forced FALSE unless the treatment is binary, so
+#     adaptive_coding == TRUE implies binary_treatment == TRUE.
+# A univariate, default-coded treatment is genuinely ambiguous from JSON alone
+# (it would require the original Z_train), so we conservatively return FALSE.
+# Reads directly from the JSON object so it does not depend on the order in
+# which the calling load path populates model_params.
+.inferBinaryTreatmentFromJson <- function(json_obj, has_field_fn) {
+  multivariate <- if (has_field_fn("multivariate_treatment")) {
+    json_obj$get_boolean("multivariate_treatment")
+  } else {
+    FALSE
+  }
+  if (isTRUE(multivariate)) {
+    return(FALSE)
+  }
+  adaptive <- if (has_field_fn("adaptive_coding")) {
+    json_obj$get_boolean("adaptive_coding")
+  } else {
+    FALSE
+  }
+  isTRUE(adaptive)
+}
+
 #' @title Convert JSON to BCF Model
 #' @param json_object Object of type `CppJson` containing Json representation of a BCF model
 #' @export
@@ -5057,6 +5097,35 @@ createBCFModelFromJson <- function(json_object) {
   model_params[["adaptive_coding"]] <- json_object$get_boolean(
     "adaptive_coding"
   )
+  if (has_field("binary_treatment")) {
+    model_params[["binary_treatment"]] <- json_object$get_boolean(
+      "binary_treatment"
+    )
+  } else {
+    model_params[["binary_treatment"]] <- .inferBinaryTreatmentFromJson(
+      json_object,
+      has_field
+    )
+    warning(sprintf(
+      "Field 'binary_treatment' not found in BCF JSON (inferred version: %s). Inferred binary_treatment=%s from other JSON fields.",
+      .ver,
+      model_params[["binary_treatment"]]
+    ))
+  }
+  if (has_field("treatment_dim")) {
+    model_params[["treatment_dim"]] <- json_object$get_scalar("treatment_dim")
+  } else {
+    model_params[["treatment_dim"]] <- 1
+    if (
+      has_field("multivariate_treatment") &&
+        isTRUE(json_object$get_boolean("multivariate_treatment"))
+    ) {
+      warning(sprintf(
+        "Field 'treatment_dim' not found in BCF JSON (inferred version: %s) for a multivariate-treatment model. Defaulting to 1.",
+        .ver
+      ))
+    }
+  }
   if (has_field("sample_tau_0")) {
     model_params[["sample_tau_0"]] <- json_object$get_boolean("sample_tau_0")
   } else {
@@ -5429,6 +5498,37 @@ createBCFModelFromCombinedJson <- function(json_object_list) {
   model_params[["adaptive_coding"]] <- json_object_default$get_boolean(
     "adaptive_coding"
   )
+  if (has_field("binary_treatment")) {
+    model_params[["binary_treatment"]] <- json_object_default$get_boolean(
+      "binary_treatment"
+    )
+  } else {
+    model_params[["binary_treatment"]] <- .inferBinaryTreatmentFromJson(
+      json_object_default,
+      has_field
+    )
+    warning(sprintf(
+      "Field 'binary_treatment' not found in BCF JSON (inferred version: %s). Inferred binary_treatment=%s from other JSON fields.",
+      .ver,
+      model_params[["binary_treatment"]]
+    ))
+  }
+  if (has_field("treatment_dim")) {
+    model_params[["treatment_dim"]] <- json_object_default$get_scalar(
+      "treatment_dim"
+    )
+  } else {
+    model_params[["treatment_dim"]] <- 1
+    if (
+      has_field("multivariate_treatment") &&
+        isTRUE(json_object_default$get_boolean("multivariate_treatment"))
+    ) {
+      warning(sprintf(
+        "Field 'treatment_dim' not found in BCF JSON (inferred version: %s) for a multivariate-treatment model. Defaulting to 1.",
+        .ver
+      ))
+    }
+  }
   if (has_field("sample_tau_0")) {
     model_params[["sample_tau_0"]] <- json_object_default$get_boolean(
       "sample_tau_0"
@@ -5889,6 +5989,37 @@ createBCFModelFromCombinedJsonString <- function(json_string_list) {
   model_params[["adaptive_coding"]] <- json_object_default$get_boolean(
     "adaptive_coding"
   )
+  if (has_field("binary_treatment")) {
+    model_params[["binary_treatment"]] <- json_object_default$get_boolean(
+      "binary_treatment"
+    )
+  } else {
+    model_params[["binary_treatment"]] <- .inferBinaryTreatmentFromJson(
+      json_object_default,
+      has_field
+    )
+    warning(sprintf(
+      "Field 'binary_treatment' not found in BCF JSON (inferred version: %s). Inferred binary_treatment=%s from other JSON fields.",
+      .ver,
+      model_params[["binary_treatment"]]
+    ))
+  }
+  if (has_field("treatment_dim")) {
+    model_params[["treatment_dim"]] <- json_object_default$get_scalar(
+      "treatment_dim"
+    )
+  } else {
+    model_params[["treatment_dim"]] <- 1
+    if (
+      has_field("multivariate_treatment") &&
+        isTRUE(json_object_default$get_boolean("multivariate_treatment"))
+    ) {
+      warning(sprintf(
+        "Field 'treatment_dim' not found in BCF JSON (inferred version: %s) for a multivariate-treatment model. Defaulting to 1.",
+        .ver
+      ))
+    }
+  }
   if (has_field("sample_tau_0")) {
     model_params[["sample_tau_0"]] <- json_object_default$get_boolean(
       "sample_tau_0"
