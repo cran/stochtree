@@ -1,3 +1,10 @@
+# stochtree 0.4.5
+
+## Bug Fixes
+
+* Fix `IndexError` when sampling a mean-only Python BART model with categorical covariates; the excluded-variable weight zero-out is now guarded by the forest-inclusion flags, matching the R implementation [#411](https://github.com/StochasticTree/stochtree/pull/411)
+* Fix ordinal class prediction bug in R BART [#399](https://github.com/StochasticTree/stochtree/issues/399)
+
 # stochtree 0.4.4
 
 ## Documentation and Other Maintenance

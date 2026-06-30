@@ -1,8 +1,8 @@
-deac20698b45c342a8bf9cece8c00e69 *DESCRIPTION
+d46900f20945b7fd8a0918e71bd3c67a *DESCRIPTION
 3449f3cf486bc439d60223492ff75a38 *LICENSE
 ec70ac940bfcfb6556f1e1256cea8aaa *NAMESPACE
-015c17869d58a12ed44aec94ee80f9af *NEWS.md
-b5ea1867b02b4e9d5107dd61099698e2 *R/bart.R
+10e6c30fb8700c296705a839f14cc482 *NEWS.md
+57852f1f99360ea9b34bd7d22f92e516 *R/bart.R
 b19d30e0c96aeba7203c1a0eae0e29c1 *R/bcf.R
 b6bb856dd10b9cad965cc83ba66129cb *R/calibration.R
 cc5eb003375424f4b98be02329be4627 *R/config.R
@@ -21,8 +21,8 @@ a1d2733b87ff8747586b385f3e71b08e *R/utils.R
 3a67651e8815751c5dbe1789f6d519a7 *README.md
 76161b65639451c966be75488458b3c3 *build/partial.rdb
 6071edd604dbeb75308cfbedc7790398 *cleanup
-311fb4fc18fbf669f8120000ba60e3d7 *configure
-89f34bb64afaf50a9f485a443d73799b *configure.ac
+8ef527962e4089f2dd6570764e664413 *configure
+b5c88e45313b711ab0feda6c59bdff7b *configure.ac
 ede0b94098cd0c69ca65246b9af18a7a *configure.win
 b3944848d8f9305c2788071bd303f283 *inst/COPYRIGHTS
 a129c25ffd4d28826f8e56fd39c552e8 *man/BARTSerialization.Rd
@@ -466,7 +466,7 @@ be38b1b1cc4afb90c84719263d6eb9e3 *src/stochtree_types.h
 e0eb021d4ceecf505334a7d898f6df3e *src/tree.cpp
 6827d107a0e5bca3ff149fdbd40bdd1e *tests/testthat.R
 360326a0bcd4bdf0a0dd82648eda8877 *tests/testthat/test-api-combinations.R
-d5e6c9b1b4ca1f96de8491522e590397 *tests/testthat/test-bart.R
+50bd0d8a8cc23c3a6e0e6fa0d891446d *tests/testthat/test-bart.R
 bb10e3fc5b917269d351814e288fedda *tests/testthat/test-bcf.R
 a36ee79b6f75373903d7b26836a36f88 *tests/testthat/test-categorical.R
 770d879f1a0abfffe6bd58ee4a54c47d *tests/testthat/test-data-preprocessing.R
